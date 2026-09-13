@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { AlertTriangle, RefreshCw, Trash2 } from "lucide-react";
+import { AlertTriangle, Check, Copy, RefreshCw, Trash2 } from "lucide-react";
 import { format } from "date-fns";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,13 @@ import { api } from "@/utils/api";
 import { PENDING_ENDPOINTS } from "@/utils/api-endpoints";
 import { getErrorMessage } from "@/lib/error-message";
 import { useApiQuery } from "@/hooks/use-api-query";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 
 interface PendingItem {
   id: string;
@@ -28,7 +35,11 @@ interface PendingItem {
   last_error_code: string | null;
   next_attempt_at: string | null;
   claimed_by: string | null;
+  lease_until: string | null;
   created_at: string | null;
+  source_created_at: string | null;
+  content_hash: string | null;
+  idempotency_key: string | null;
 }
 
 interface CircuitBreaker {
@@ -74,6 +85,91 @@ const STATE_STYLE: Record<PendingItem["state"], string> = {
   dead: "text-onSurface-danger-primary border-onSurface-danger-primary",
 };
 
+/** `embedding` means a worker holds it. An expired lease means nobody does.
+ *
+ * Both render as "embedding", and the second is the worse place to be stuck
+ * because it looks like progress. The lease is the only evidence available - a
+ * dead process does not announce itself - so a row past its lease is shown as
+ * stalled and the claim query treats it as free.
+ */
+function isStalled(row: PendingItem): boolean {
+  if (row.state !== "embedding") return false;
+  if (!row.lease_until) return true;
+  return new Date(row.lease_until).getTime() < Date.now();
+}
+
+/** Copy a value without leaving the page.
+ *
+ * A provider error is the one field here that has to leave the dashboard - it
+ * goes into a bug report, a support thread, or a search. Selecting it by hand
+ * out of a clipped table cell is where people give up and paraphrase, and a
+ * paraphrased error is the one that cannot be looked up.
+ */
+function CopyValue({ value, label }: { value: string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = async (event: React.MouseEvent) => {
+    // The row opens a detail panel; copying must not also open it.
+    event.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      toast({
+        title: "Could not copy",
+        description: "The browser blocked clipboard access.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      title={label ?? "Copy"}
+      aria-label={copied ? "Copied" : (label ?? "Copy")}
+      className="inline-flex items-center shrink-0 rounded p-1 hover:bg-surface-default-primary-hover"
+    >
+      {copied ? (
+        <Check className="size-3.5 text-onSurface-success-primary" />
+      ) : (
+        <Copy className="size-3.5 text-onSurface-default-secondary" />
+      )}
+    </button>
+  );
+}
+
+function Field({
+  label,
+  value,
+  mono,
+  copyable,
+}: {
+  label: string;
+  value: string | null | undefined;
+  mono?: boolean;
+  copyable?: boolean;
+}) {
+  const shown = value ?? "-";
+  return (
+    <div className="space-y-1">
+      <div className="text-xs uppercase text-onSurface-default-secondary">{label}</div>
+      <div className="flex items-start gap-2">
+        <div
+          className={`flex-1 whitespace-pre-wrap break-words text-sm ${
+            mono ? "font-mono text-xs" : ""
+          }`}
+        >
+          {shown}
+        </div>
+        {copyable && value ? <CopyValue value={value} label={`Copy ${label}`} /> : null}
+      </div>
+    </div>
+  );
+}
+
 function Stat({ label, value, hint }: { label: string; value: number; hint?: string }) {
   return (
     <Card className="border-memBorder-primary p-4">
@@ -86,6 +182,7 @@ function Stat({ label, value, hint }: { label: string; value: number; hint?: str
 
 export default function QueuePage() {
   const [toDelete, setToDelete] = useState<PendingItem | null>(null);
+  const [detail, setDetail] = useState<PendingItem | null>(null);
   const [retrying, setRetrying] = useState(false);
 
   const {
@@ -100,11 +197,21 @@ export default function QueuePage() {
     { errorToast: "Failed to load the embedding queue", initialData: EMPTY },
   );
 
-  const handleRetry = async () => {
+  const handleRetry = async (force = false) => {
     setRetrying(true);
     try {
-      await api.post(PENDING_ENDPOINTS.RETRY, {});
-      toast({ title: "Queue re-armed", variant: "success" });
+      const res = await api.post<{ note?: string; attempting?: boolean }>(
+        PENDING_ENDPOINTS.RETRY(force),
+        {},
+      );
+      // The server decides whether anything is actually attempted, so it says
+      // so. Reporting a flat "re-armed" beside a parked banner left it unclear
+      // whether the provider had been called.
+      toast({
+        title: res.data?.attempting ? "Re-armed, worker running" : "Re-armed, queue still parked",
+        description: res.data?.note,
+        variant: "success",
+      });
       void refetch();
     } catch (error) {
       toast({
@@ -138,9 +245,19 @@ export default function QueuePage() {
       key: "state" as keyof PendingItem,
       label: "State",
       width: 90,
-      render: (value: PendingItem["state"]) => (
-        <Badge variant="outline" className={`capitalize ${STATE_STYLE[value]}`}>
-          {value}
+      render: (value: PendingItem["state"], row: PendingItem) => (
+        <Badge
+          variant="outline"
+          className={`capitalize ${
+            isStalled(row) ? STATE_STYLE.error : STATE_STYLE[value]
+          }`}
+          title={
+            isStalled(row)
+              ? "The worker that claimed this is gone. It will be picked up again."
+              : undefined
+          }
+        >
+          {isStalled(row) ? "stalled" : value}
         </Badge>
       ),
     },
@@ -173,12 +290,17 @@ export default function QueuePage() {
       label: "Last error",
       width: 220,
       render: (value: string | null, row: PendingItem) => (
-        <span
-          className="text-onSurface-default-secondary line-clamp-2"
-          title={row.last_error ?? undefined}
-        >
-          {value ?? "-"}
-        </span>
+        <div className="flex items-center gap-1">
+          <span
+            className="text-onSurface-default-secondary line-clamp-2"
+            title={row.last_error ?? undefined}
+          >
+            {value ?? "-"}
+          </span>
+          {row.last_error ? (
+            <CopyValue value={row.last_error} label="Copy the full error" />
+          ) : null}
+        </div>
       ),
     },
     {
@@ -201,6 +323,7 @@ export default function QueuePage() {
   ];
 
   const breaker = data.circuit_breaker;
+  const breakerOpen = breaker.open;
 
   return (
     <div className="space-y-4">
@@ -213,10 +336,32 @@ export default function QueuePage() {
             until they drain.</strong>
           </p>
         </div>
-        <Button onClick={handleRetry} disabled={retrying} className="gap-2">
-          <RefreshCw className={`size-4 ${retrying ? "animate-spin" : ""}`} />
-          Retry all now
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            onClick={() => handleRetry(false)}
+            disabled={retrying}
+            variant={breakerOpen ? "outline" : "default"}
+            className="gap-2"
+            title={
+              breakerOpen
+                ? "Re-arms the rows. Nothing is sent to the provider while the queue is parked."
+                : "Re-arm every error and dead row, and run the worker now."
+            }
+          >
+            <RefreshCw className={`size-4 ${retrying ? "animate-spin" : ""}`} />
+            {breakerOpen ? "Re-arm rows" : "Retry all now"}
+          </Button>
+          {breakerOpen && (
+            <Button
+              onClick={() => handleRetry(true)}
+              disabled={retrying}
+              className="gap-2"
+              title="Only if the cause is actually fixed - a raised quota, a replaced key."
+            >
+              Probe now
+            </Button>
+          )}
+        </div>
       </div>
 
       {breaker.open && (
@@ -234,6 +379,10 @@ export default function QueuePage() {
                   ? `Next probe ${format(new Date(breaker.retry_at), "HH:mm:ss")}. Retrying every row
                      independently would spend the whole allowance discovering the same outage.`
                   : null}
+            </div>
+            <div className="text-xs text-onSurface-default-secondary">
+              While parked, <strong>Re-arm rows</strong> only resets their state — nothing is sent
+              to the provider. Use <strong>Probe now</strong> once the cause is actually fixed.
             </div>
           </div>
         </Card>
@@ -256,9 +405,98 @@ export default function QueuePage() {
         />
       ) : (
         <Card className="border-memBorder-primary overflow-hidden">
-          <DataTable data={data.items} columns={columns} getRowKey={(row) => row.id} />
+          <DataTable
+            data={data.items}
+            columns={columns}
+            getRowKey={(row) => row.id}
+            onRowClick={(row) => setDetail(row)}
+          />
         </Card>
       )}
+
+      <Sheet open={!!detail} onOpenChange={(open) => !open && setDetail(null)}>
+        <SheetContent className="w-full sm:max-w-xl overflow-y-auto">
+          <SheetHeader>
+            <SheetTitle className="flex items-center gap-2">
+              Queued memory
+              {detail && (
+                <Badge
+                  variant="outline"
+                  className={`capitalize ${
+                    isStalled(detail) ? STATE_STYLE.error : STATE_STYLE[detail.state]
+                  }`}
+                >
+                  {isStalled(detail) ? "stalled" : detail.state}
+                </Badge>
+              )}
+            </SheetTitle>
+            <SheetDescription>
+              Stored on the server and safe. Not searchable until it is embedded.
+            </SheetDescription>
+          </SheetHeader>
+
+          {detail && (
+            <div className="mt-6 space-y-5">
+              <Field label="Memory" value={detail.text} copyable />
+
+              {detail.last_error ? (
+                <div className="space-y-1">
+                  <div className="text-xs uppercase text-onSurface-default-secondary">
+                    Last error
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <pre className="flex-1 whitespace-pre-wrap break-words rounded border border-memBorder-primary bg-surface-default-fg-secondary p-3 font-mono text-xs">
+                      {detail.last_error}
+                    </pre>
+                    <CopyValue value={detail.last_error} label="Copy the full error" />
+                  </div>
+                  <div className="text-xs text-onSurface-default-secondary">
+                    code: {detail.last_error_code ?? "-"} · attempt {detail.attempts}
+                  </div>
+                </div>
+              ) : (
+                <Field label="Last error" value={null} />
+              )}
+
+              {isStalled(detail) && (
+                <Card className="border-onSurface-danger-primary p-3 text-sm">
+                  The worker that claimed this row is gone — its lease has expired. No
+                  embedding is in progress. The next worker pass will pick it up.
+                </Card>
+              )}
+
+              <div className="grid grid-cols-2 gap-4">
+                <Field label="Written at" value={detail.source_created_at} />
+                <Field label="Queued at" value={detail.created_at} />
+                <Field label="Next attempt" value={detail.next_attempt_at} />
+                <Field label="Lease until" value={detail.lease_until} />
+                <Field label="user_id" value={detail.user_id} />
+                <Field label="agent_id" value={detail.agent_id} />
+                <Field label="run_id" value={detail.run_id} />
+                <Field label="Claimed by" value={detail.claimed_by} />
+              </div>
+
+              <Field label="Idempotency key" value={detail.idempotency_key} mono copyable />
+              <Field label="Content hash" value={detail.content_hash} mono copyable />
+              <Field label="Queue id" value={detail.id} mono copyable />
+
+              <div className="flex gap-2 pt-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setToDelete(detail);
+                    setDetail(null);
+                  }}
+                  className="gap-2"
+                >
+                  <Trash2 className="size-4" />
+                  Discard
+                </Button>
+              </div>
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
 
       <DeleteConfirmationModal
         isOpen={!!toDelete}

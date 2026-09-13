@@ -34,7 +34,12 @@ SERVER = Path(__file__).resolve().parents[2] / "server"
 if str(SERVER) not in sys.path:
     sys.path.insert(0, str(SERVER))
 
-from pending_policy import QUEUEABLE_CODES, CircuitBreaker, content_hash  # noqa: E402
+from pending_policy import (  # noqa: E402
+    QUEUEABLE_CODES,
+    CircuitBreaker,
+    content_hash,
+    source_created_at,
+)
 
 
 NOW = datetime(2026, 9, 13, 12, 0, tzinfo=timezone.utc)
@@ -157,3 +162,40 @@ def test_an_auth_failure_is_queued_here_too():
     # Same reasoning as the client spool: a rejected key is a configuration
     # problem, and the write itself is still good.
     assert "provider_auth_failed" in QUEUEABLE_CODES
+
+
+# ------------------------------------------------------------------ ordering
+
+
+def test_the_memory_s_own_date_is_read_from_the_metadata_envelope():
+    # Ordering on arrival time re-dates everything a client replays after an
+    # outage: memories made hours apart all arrive "now", so they drain in the
+    # wrong order and recency ranking sees them as newly written.
+    assert source_created_at({"metadata": {"created_at": "2026-09-10T09:00:00+00:00"}}) == datetime(
+        2026, 9, 10, 9, 0, tzinfo=timezone.utc
+    )
+
+
+def test_a_naive_timestamp_is_read_as_utc_rather_than_dropped():
+    # Dropping it would fall back to arrival time - the exact bug this field
+    # exists to fix - while comparing it raw against aware values would raise.
+    assert source_created_at({"metadata": {"created_at": "2026-09-10T09:00:00"}}) == datetime(
+        2026, 9, 10, 9, 0, tzinfo=timezone.utc
+    )
+
+
+def test_a_missing_or_unparseable_date_falls_back_instead_of_raising():
+    # enqueue runs inside a failure handler. Raising here would turn a queued
+    # write into a lost one.
+    for payload in ({}, {"metadata": {}}, {"metadata": {"created_at": "not a date"}},
+                    {"metadata": {"created_at": ""}}, {"metadata": {"created_at": 12345}}):
+        assert source_created_at(payload) is None
+
+
+def test_ordering_puts_the_oldest_memory_first():
+    # The property the queue depends on, independent of any SQL.
+    made = [
+        source_created_at({"metadata": {"created_at": s}})
+        for s in ("2026-09-10T15:00:00+00:00", "2026-09-10T09:00:00+00:00", "2026-09-10T12:00:00+00:00")
+    ]
+    assert [d.hour for d in sorted(made)] == [9, 12, 15]

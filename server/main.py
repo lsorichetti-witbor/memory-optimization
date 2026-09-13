@@ -444,6 +444,11 @@ def add_memory(
     params = {k: v for k, v in memory_create.model_dump().items() if v is not None and k != "messages"}
     messages = [m.model_dump() for m in memory_create.messages]
     key = idempotency_key or (memory_create.metadata or {}).get("idempotency_key")
+    if key:
+        # The key has to travel with the memory into the vector store, or the
+        # worker has nothing to compare against and cannot tell "already stored"
+        # from "never stored" after a crash between insert and dequeue.
+        params["metadata"] = {**(params.get("metadata") or {}), "idempotency_key": key}
 
     # A retry of a request whose response never arrived is the normal case, not
     # an error: answer it the same way twice rather than storing it twice.
@@ -521,7 +526,14 @@ def list_pending(state: Optional[str] = None, limit: int = 100, _auth=Depends(ve
                     "last_error_code": r.last_error_code,
                     "next_attempt_at": r.next_attempt_at.isoformat() if r.next_attempt_at else None,
                     "claimed_by": r.claimed_by,
+                    # Exposed so the dashboard can tell "a worker is on it" from
+                    # "a worker died holding it". Both read `embedding`, and the
+                    # second one looks like progress if the lease is hidden.
+                    "lease_until": r.lease_until.isoformat() if r.lease_until else None,
+                    "content_hash": r.content_hash,
+                    "idempotency_key": r.idempotency_key,
                     "created_at": r.created_at.isoformat() if r.created_at else None,
+                    "source_created_at": r.source_created_at.isoformat() if r.source_created_at else None,
                 }
                 for r in rows
             ],
@@ -529,24 +541,52 @@ def list_pending(state: Optional[str] = None, limit: int = 100, _auth=Depends(ve
 
 
 @app.post("/memories/pending/retry", summary="Re-arm queued memories now")
-def retry_pending(_auth=Depends(require_admin)):
-    """Move `error` and `dead` rows back to `pending` and wake the worker.
+def retry_pending(force: bool = False, _auth=Depends(require_admin)):
+    """Move `error` and `dead` rows back to `pending`, ready for the next pass.
 
     The manual counterpart to the automatic sweep: for when a person has fixed
     the cause and does not want to wait out a backoff, or wants to give a
     dead-lettered write another go.
+
+    **While the queue is parked this re-arms the rows and stops there.** It used
+    to close the breaker and wake the worker unconditionally, which contradicted
+    the banner the user was looking at: the page said "parked - next probe at
+    20:30" and the button went straight back to the provider, pushed rows into
+    `embedding`, and hit the same wall. Parked means parked.
+
+    `force=true` is the explicit override, for a person who has actually fixed
+    the cause - raised the quota, replaced the key - and wants a probe now
+    rather than at the scheduled time.
     """
     with SessionLocal() as db:
-        db.execute(
+        result = db.execute(
             update(PendingMemory)
             .where(PendingMemory.state.in_([pending.ERROR, pending.DEAD]))
             .values(state=pending.PENDING, next_attempt_at=datetime.now(timezone.utc), attempts=0)
         )
         db.commit()
+        rearmed = int(result.rowcount or 0)
         summary = pending.stats(db)
-    pending.breaker.close()
-    pending_worker.wake()
-    return summary
+
+    parked = pending.breaker.is_open
+    probing = force or not parked
+    if probing:
+        pending.breaker.close()
+        pending_worker.wake()
+
+    return {
+        **summary,
+        "rearmed": rearmed,
+        # Say what actually happened. "Re-armed 12" next to a parked banner is
+        # ambiguous about whether anything will be tried.
+        "attempting": probing,
+        "note": (
+            f"Re-armed {rearmed} row(s). The queue is parked, so nothing will be sent to the "
+            f"provider until the next probe. Use force=true if the cause is fixed."
+            if parked and not probing
+            else f"Re-armed {rearmed} row(s); the worker is running now."
+        ),
+    }
 
 
 @app.delete("/memories/pending/{pending_id}", summary="Drop one queued memory")

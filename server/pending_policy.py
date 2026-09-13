@@ -59,6 +59,28 @@ def content_hash(text: str) -> str:
     return hashlib.md5(text.encode()).hexdigest()
 
 
+def source_created_at(payload: dict) -> Optional[datetime]:
+    """When the memory was made, as the caller reported it.
+
+    Read from the metadata envelope the client already sends. Falling back to
+    arrival time is right for a caller that sent none, but using arrival time
+    for a caller that DID send one silently re-dates every memory replayed from
+    a client spool: they arrive hours late, all at once, so they drain in the
+    wrong order and rank as though they had just been written.
+    """
+    stamp = ((payload or {}).get("metadata") or {}).get("created_at")
+    if not isinstance(stamp, str) or not stamp:
+        return None
+    try:
+        parsed = datetime.fromisoformat(stamp)
+    except ValueError:
+        return None
+    # A naive timestamp raises when compared against timezone-aware ones, in
+    # Postgres and in Python. Assume UTC, which is what the client writes -
+    # dropping it would fall back to arrival time, the bug this exists to fix.
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 

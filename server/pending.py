@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 import os
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from sqlalchemy import func, select, text as sql_text, update
@@ -46,6 +46,7 @@ from pending_policy import (  # re-exported so callers have one import
     CircuitBreaker,
     backoff as _backoff,
     content_hash,
+    source_created_at,
     utcnow as _utcnow,
 )
 
@@ -97,6 +98,7 @@ def enqueue(
         last_error=error[:2000] or None,
         last_error_code=error_code or None,
         next_attempt_at=_utcnow(),
+        source_created_at=source_created_at(payload) or _utcnow(),
     )
     db.add(row)
     db.commit()
@@ -117,16 +119,38 @@ def claim_batch(db: Session, limit: int = 10, *, now: Optional[datetime] = None)
 
     A row whose lease has expired is claimable again - that is the crash case,
     where the worker holding it went away without finishing.
+
+    `error` rows are claimable once their backoff has elapsed. They were left out
+    at first, which made `next_attempt_at` a field that was written and never
+    read: with one row in the queue and nothing else succeeding, there was no
+    later success to trigger the sweep, so it sat in `error` forever waiting for
+    a human. Measured - a single failed row was still unclaimable two days after
+    its backoff expired.
+
+    `dead` is deliberately still excluded. That one really is waiting for a
+    person.
+
+    A lease further out than one lease-length is treated as already expired. No
+    honest claim can produce one: it means a clock jumped, or something wrote it
+    with the wrong `now`. Without this the row is unreachable until that date
+    passes and no worker will touch it - observed as a row sitting in
+    `embedding`, held by a process that no longer exists, with a lease two days
+    in the future. `embedding` with nobody working is the worst state to be
+    stuck in, because it looks like progress.
     """
     moment = now or _utcnow()
     claimable = sql_text(
         """
         SELECT id FROM pending_memories
         WHERE (
-            (state = :pending AND (next_attempt_at IS NULL OR next_attempt_at <= :now))
-            OR (state = :embedding AND lease_until IS NOT NULL AND lease_until < :now)
+            (state IN (:pending, :error) AND (next_attempt_at IS NULL OR next_attempt_at <= :now))
+            OR (state = :embedding AND (
+                    lease_until IS NULL
+                    OR lease_until < :now
+                    OR lease_until > :max_lease
+            ))
         )
-        ORDER BY created_at
+        ORDER BY COALESCE(source_created_at, created_at)
         FOR UPDATE SKIP LOCKED
         LIMIT :limit
         """
@@ -134,7 +158,15 @@ def claim_batch(db: Session, limit: int = 10, *, now: Optional[datetime] = None)
     ids = [
         r[0]
         for r in db.execute(
-            claimable, {"pending": PENDING, "embedding": EMBEDDING, "now": moment, "limit": limit}
+            claimable,
+            {
+                "pending": PENDING,
+                "error": ERROR,
+                "embedding": EMBEDDING,
+                "now": moment,
+                "max_lease": moment + timedelta(seconds=LEASE_SECONDS * 2),
+                "limit": limit,
+            },
         ).fetchall()
     ]
     if not ids:
@@ -152,10 +184,43 @@ def claim_batch(db: Session, limit: int = 10, *, now: Optional[datetime] = None)
         )
     )
     db.commit()
-    return list(db.execute(select(PendingMemory).where(PendingMemory.id.in_(ids))).scalars())
+    # Ordered again, deliberately. The claim above picks the oldest rows, but a
+    # bare SELECT ... WHERE id IN (...) returns them in whatever order Postgres
+    # finds convenient - so the batch was chosen oldest-first and then embedded
+    # in an arbitrary one. Measured: memories made at 15:00, 09:00 and 12:00
+    # drained in exactly that order.
+    return list(
+        db.execute(
+            select(PendingMemory)
+            .where(PendingMemory.id.in_(ids))
+            .order_by(func.coalesce(PendingMemory.source_created_at, PendingMemory.created_at))
+        ).scalars()
+    )
 
 
 # ------------------------------------------------------------------ outcomes
+
+
+def release(db: Session, rows, *, now: Optional[datetime] = None) -> int:
+    """Hand claimed rows back without counting an attempt against them.
+
+    For a batch that stops early - the provider went down partway through, so
+    the rest were never tried. Leaving them to their lease would park them in
+    `embedding` for the lease's duration, which reads as "a worker is on it"
+    when no worker is. That is the most misleading state in the system, and it
+    is avoidable: they were never attempted, so say so.
+    """
+    ids = [r.id for r in rows]
+    if not ids:
+        return 0
+    moment = now or _utcnow()
+    result = db.execute(
+        update(PendingMemory)
+        .where(PendingMemory.id.in_(ids), PendingMemory.state == EMBEDDING)
+        .values(state=PENDING, claimed_by=None, lease_until=None, updated_at=moment)
+    )
+    db.commit()
+    return int(result.rowcount or 0)
 
 
 def mark_stored(db: Session, row_id: uuid.UUID) -> None:
@@ -211,6 +276,38 @@ def rearm_errors(db: Session, *, now: Optional[datetime] = None) -> int:
 
 
 # ---------------------------------------------------------------- reuse & stats
+
+
+def already_stored(memory, idempotency_key: Optional[str]) -> bool:
+    """Is this queued row's memory already in the vector store?
+
+    The crash window: a worker embeds, inserts, and dies before deleting its
+    queue row. The lease expires, someone re-claims it, and the memory is stored
+    a second time - a duplicate, and a wasted embedding out of an allowance that
+    was already the reason the row was queued.
+
+    Checked by the idempotency key rather than the text, because the same
+    sentence written to two scopes is two legitimate memories while the same key
+    is by definition one write.
+
+    Fails toward re-storing: if the lookup itself errors this returns False and
+    the row is attempted. A duplicate is recoverable, a lost memory is not, so
+    an unreadable answer must never be read as "already there".
+    """
+    if not idempotency_key:
+        return False
+    try:
+        store = memory.vector_store
+        with store._get_cursor() as cur:  # noqa: SLF001 - no public API exposes payload filters
+            cur.execute(
+                f"SELECT 1 FROM {store.collection_name} "  # noqa: S608 - identifier from config, not input
+                "WHERE payload->>'idempotency_key' = %s LIMIT 1",
+                (idempotency_key,),
+            )
+            return cur.fetchone() is not None
+    except Exception as error:  # noqa: BLE001 - see docstring
+        logger.debug("already-stored lookup failed, will re-attempt the write: %s", error)
+        return False
 
 
 def reuse_vector_for(memory, text: str) -> Optional[list[float]]:

@@ -29,7 +29,7 @@ export const REQUEST_ENDPOINTS = {
 
 export const PENDING_ENDPOINTS = {
   BASE: "/memories/pending",
-  RETRY: "/memories/pending/retry",
+  RETRY: (force = false) => `/memories/pending/retry${force ? "?force=true" : ""}`,
   BY_ID: (id: string) => `/memories/pending/${encodeURIComponent(id)}`,
 } as const;
 

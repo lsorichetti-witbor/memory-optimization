@@ -120,5 +120,11 @@ class PendingMemory(Base):
     claimed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # When the memory was MADE. `created_at` below is when the server accepted
+    # it, and those differ by hours when a client replays a spool after an
+    # outage - so ordering on arrival time drains them in the wrong order and
+    # recency ranking sees them as newer than memories written long after.
+    source_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)

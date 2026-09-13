@@ -98,7 +98,13 @@ def drain_once(memory_factory, *, batch_size: int = BATCH_SIZE) -> dict[str, int
 
     Returns counts so the caller can decide whether to come back immediately.
     """
-    result = {"claimed": 0, "stored": 0, "failed": 0, "dead": 0, "rearmed": 0, "skipped_breaker": 0}
+    # `already_stored` is counted apart from `stored`: a row removed because the
+    # work was done earlier is not a write this pass performed, and folding the
+    # two together would report embeddings that never happened.
+    result = {
+        "claimed": 0, "stored": 0, "already_stored": 0,
+        "failed": 0, "dead": 0, "rearmed": 0, "skipped_breaker": 0, "released": 0,
+    }
 
     if not pending.breaker.allows():
         # The queue is parked. Counting the skip rather than silently returning
@@ -116,9 +122,20 @@ def drain_once(memory_factory, *, batch_size: int = BATCH_SIZE) -> dict[str, int
         memory = memory_factory()
         install_embedding_reuse(memory)
 
-        for row in rows:
+        for index, row in enumerate(rows):
             params = dict(row.payload or {})
             messages = params.pop("messages", None) or [{"role": "user", "content": row.text}]
+
+            # Work that is already done must leave the queue, not be redone. A
+            # worker that embedded, inserted, then died before deleting its row
+            # leaves it claimable again once the lease expires; re-running it
+            # would store the memory twice and spend an embedding out of the
+            # allowance that queued it in the first place.
+            if pending.already_stored(memory, row.idempotency_key):
+                pending.mark_stored(db, row.id)
+                result["already_stored"] += 1
+                continue
+
             try:
                 memory.add(messages=messages, **params)
             except Exception as error:  # noqa: BLE001 - the code decides what happens next
@@ -127,10 +144,18 @@ def drain_once(memory_factory, *, batch_size: int = BATCH_SIZE) -> dict[str, int
                 result["dead" if state == pending.DEAD else "failed"] += 1
                 pending.breaker.trip(code, detail)
                 if pending.breaker.is_open:
-                    # Everyone else in this batch would hit the same wall. Stop
-                    # and let the remaining leases expire rather than spending
-                    # the rest of the allowance discovering it once per row.
-                    logger.warning("embedding queue parked: %s (%s)", detail, code)
+                    # Everyone else in this batch would hit the same wall, so
+                    # stop rather than spending the rest of the allowance
+                    # discovering it once per row. Hand the untried ones back
+                    # immediately: waiting out their lease would leave them
+                    # sitting in `embedding`, which reads as work in progress
+                    # when nothing is progressing.
+                    freed = pending.release(db, rows[index + 1:])
+                    result["released"] += freed
+                    logger.warning(
+                        "embedding queue parked: %s (%s); released %d untried row(s)",
+                        detail, code, freed,
+                    )
                     break
                 continue
 
