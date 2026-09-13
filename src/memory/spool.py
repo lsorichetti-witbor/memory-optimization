@@ -247,6 +247,8 @@ class Spool:
         force: bool = False,
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
         now: Optional[datetime] = None,
+        user: Optional[str] = None,
+        limit: Optional[int] = None,
     ) -> FlushReport:
         """Replay every queued write. `provider_factory(user)` returns a provider.
 
@@ -257,8 +259,19 @@ class Spool:
         `force` ignores backoff, for a human who has just fixed the cause and
         does not want to wait. `max_attempts` bounds the retry loop; an entry
         past it moves to `dead/` rather than being retried forever or deleted.
+
+        `user` restricts the replay to one author's entries. An opportunistic
+        drain has only its own caller's provider to hand, and replaying someone
+        else's memory under the wrong identity would hide it from them -
+        `user_id` is part of the search filter.
+
+        `limit` caps how many are attempted. A background drain must not turn
+        one `store` into a several-minute stall because a large backlog
+        happened to be waiting.
         """
         files = self._files()
+        if user is not None or limit is not None:
+            files = self._select(files, user=user, limit=limit)
         report = FlushReport(total=len(files))
         providers: dict[str, object] = {}
         moment = now or datetime.now(timezone.utc)
@@ -342,6 +355,28 @@ class Spool:
                 close()
 
         return report
+
+    @staticmethod
+    def _select(files: list[Path], *, user: Optional[str], limit: Optional[int]) -> list[Path]:
+        """Narrow the replay set, oldest first.
+
+        An entry that will not parse is kept in the set rather than filtered
+        out: flush reports it as unreadable, and silently skipping it here would
+        make a corrupt file invisible to the one command that would mention it.
+        """
+        chosen: list[Path] = []
+        for path in files:
+            if limit is not None and len(chosen) >= limit:
+                break
+            if user is not None:
+                try:
+                    owner = json.loads(path.read_text(encoding="utf-8")).get("user")
+                except (OSError, ValueError):
+                    owner = None
+                if owner is not None and owner != user:
+                    continue
+            chosen.append(path)
+        return chosen
 
     @staticmethod
     def _already_stored(

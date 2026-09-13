@@ -95,6 +95,11 @@ class DurableProvider(MemoryProvider):
     the point - reads may fail fast, writes may not fail at all.
     """
 
+    # How many queued writes one successful write will try to drain. Bounded so
+    # a single `store` cannot stall for minutes because a large backlog was
+    # waiting; the remainder drains on the next write, or on an explicit flush.
+    DEFAULT_MAX_DRAIN = 25
+
     def __init__(
         self,
         inner: MemoryProvider,
@@ -102,11 +107,18 @@ class DurableProvider(MemoryProvider):
         user: str,
         spool: Optional[Spool] = None,
         repository: Optional[str] = None,
+        auto_drain: bool = True,
+        max_drain: int = DEFAULT_MAX_DRAIN,
     ) -> None:
         self._inner = inner
         self._user = user
         self._spool = spool if spool is not None else Spool()
         self._repository = repository
+        self._auto_drain = auto_drain
+        self._max_drain = max_drain
+        # The report from the most recent opportunistic drain, so a CLI can say
+        # what happened. None means no drain ran on this call.
+        self.last_drain = None
 
     @property
     def inner(self) -> MemoryProvider:
@@ -183,7 +195,41 @@ class DurableProvider(MemoryProvider):
             raise
 
         self._spool.discard(path)
+        self._drain_backlog()
         return records
+
+    def _drain_backlog(self) -> None:
+        """Replay what is queued, now that a write has just succeeded.
+
+        The trigger is the right one on purpose: a successful write is direct
+        evidence that whatever was blocking the queue has stopped blocking it.
+        While an embedder is down every write fails, so nothing fires; the first
+        write after recovery clears the backlog. No timer, no daemon, and no
+        window where the queue is drainable but nobody is draining it.
+
+        Scoped to this user's entries because that is the only identity this
+        provider can write as - `user_id` is part of the search filter, so
+        replaying a teammate's memory as us would hide it from them. Their
+        entries wait for their own next write, or for an explicit flush.
+
+        Never raises. A write that reached the store has succeeded, and turning
+        that into an error because the *backlog* misbehaved would report the
+        wrong outcome for the thing the caller actually asked for.
+        """
+        self.last_drain = None
+        if not self._auto_drain or self._spool.pending() == 0:
+            return
+        try:
+            self.last_drain = self._spool.flush(
+                # The raw inner provider, not self: routing the replay back
+                # through this wrapper would write a fresh spool entry for every
+                # entry it is trying to drain.
+                lambda _user: self._inner,
+                user=self._user,
+                limit=self._max_drain,
+            )
+        except Exception:  # noqa: BLE001 - see docstring
+            self.last_drain = None
 
     def _read_back(self, path: Path, supplied: Optional[str]) -> Optional[str]:
         if supplied:

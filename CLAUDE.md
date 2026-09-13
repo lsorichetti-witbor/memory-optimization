@@ -40,7 +40,7 @@ Quick start on a machine that is already set up:
 | `src/evaluation/` | Retrieval benchmark: five arms, metrics, seeded dataset |
 | `src/scripts/` | CLI entry points |
 | `skills/context-memory/` | The skill and its `ctx.ps1` launcher |
-| `tests/context_memory/` | 320 tests; 2 require a live server |
+| `tests/context_memory/` | 329 tests; 2 require a live server |
 | `docs/superpowers/plans/` | The implementation plan and its execution log |
 
 ## Rules that apply when working on this code
@@ -82,7 +82,7 @@ Quick start on a machine that is already set up:
 .\.venv\Scripts\python.exe -m pytest tests/context_memory -q
 ```
 
-320 tests. The 2 integration tests need `MEM0_API_URL` / `MEM0_API_KEY` /
+329 tests. The 2 integration tests need `MEM0_API_URL` / `MEM0_API_KEY` /
 `MEM0_USER` set — **a skip there is a failure of the check, not a pass.**
 
 A 502 now names its own cause, so read the message before suspecting the code:

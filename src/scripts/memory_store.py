@@ -90,11 +90,25 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         provider.close()
 
-    emit(
-        [{"id": r.id, "text": r.text} for r in records],
-        args.json,
-        "\n".join(f"stored {r.id}: {r.text}" for r in records),
-    )
+    lines = [f"stored {r.id}: {r.text}" for r in records]
+    payload: dict | list = [{"id": r.id, "text": r.text} for r in records]
+
+    # A successful write drains whatever was queued. Say so: a command that
+    # quietly did ten times the work it was asked to do is a mystery pause, and
+    # an unreported partial drain looks exactly like a full one.
+    drain = provider.last_drain
+    if drain is not None and drain.total:
+        lines.append(f"backlog: {drain.summary()}")
+        if drain.outstanding:
+            lines.append(f"  {drain.outstanding} still queued - python -m src.scripts.memory_flush")
+        payload = {"stored": payload, "backlog": {
+            "total": drain.total,
+            "replayed": drain.replayed,
+            "already_stored": drain.already_stored,
+            "outstanding": drain.outstanding,
+        }}
+
+    emit(payload, args.json, "\n".join(lines))
     return 0
 
 

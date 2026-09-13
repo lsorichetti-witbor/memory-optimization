@@ -307,6 +307,115 @@ def test_the_advice_depends_on_why_the_write_failed(tmp_path):
     assert "start the stack" in down.advice().lower()
 
 
+# --------------------------------------------- draining on the next success
+
+
+def queued(tmp_path, *, user="lautaro", text="Queued earlier."):
+    Spool(root=tmp_path).enqueue(
+        SpooledWrite(text=text, scope=Scope.REPOSITORY, scope_key="r", user=user)
+    )
+
+
+def test_a_successful_write_drains_what_was_queued(tmp_path):
+    # The trigger: a write succeeding is evidence that whatever blocked the
+    # queue has stopped blocking it. Without this the queue only ever drains
+    # when a human remembers to run flush.
+    queued(tmp_path, text="Queued while the embedder was down.")
+    inner = Recorder()
+    provider = durable(tmp_path, inner)
+
+    provider.add("The write that proves it works again.", scope=Scope.REPOSITORY, scope_key="r")
+
+    stored = [text for text, _ in inner.added]
+    assert "Queued while the embedder was down." in stored
+    assert list(tmp_path.glob("*.json")) == [], "the backlog should be gone"
+    assert provider.last_drain.replayed == 1
+
+
+def test_draining_does_not_re_enqueue_what_it_is_draining(tmp_path):
+    # Routing the replay back through the wrapper would write a fresh entry for
+    # every entry it drains, so the queue could never empty.
+    queued(tmp_path)
+    provider = durable(tmp_path, Recorder())
+    provider.add("Works now.", scope=Scope.REPOSITORY, scope_key="r")
+    assert list(tmp_path.glob("*.json")) == []
+
+
+def test_a_drain_only_touches_this_users_entries(tmp_path):
+    # user_id is part of the search filter, so replaying a teammate's memory
+    # under our identity would hide it from them.
+    queued(tmp_path, user="teammate", text="Belongs to someone else.")
+    inner = Recorder()
+    provider = durable(tmp_path, inner)
+
+    provider.add("Mine.", scope=Scope.REPOSITORY, scope_key="r")
+
+    assert [t for t, _ in inner.added] == ["Mine."]
+    assert len(list(tmp_path.glob("*.json"))) == 1, "the teammate's entry must stay queued"
+
+
+def test_the_drain_is_capped_so_one_store_cannot_stall(tmp_path):
+    for i in range(5):
+        queued(tmp_path, text=f"Backlog entry number {i} worth keeping.")
+    inner = Recorder()
+    provider = DurableProvider(inner, user="lautaro", spool=Spool(root=tmp_path), max_drain=2)
+
+    provider.add("Works now.", scope=Scope.REPOSITORY, scope_key="r")
+
+    assert provider.last_drain.total == 2
+    assert len(list(tmp_path.glob("*.json"))) == 3, "the rest waits for the next write or a flush"
+
+
+def test_a_failing_drain_does_not_turn_a_stored_write_into_an_error(tmp_path):
+    # The caller's write reached the store. Reporting failure because the
+    # backlog misbehaved would be the wrong outcome for what was asked.
+    queued(tmp_path)
+
+    class DrainExplodes(Recorder):
+        def get_all(self, **kwargs):
+            raise RuntimeError("boom")
+
+    provider = durable(tmp_path, DrainExplodes())
+    records = provider.add("Mine.", scope=Scope.REPOSITORY, scope_key="r")
+    assert [r.text for r in records] == ["Mine."]
+
+
+def test_nothing_is_reported_when_there_was_no_backlog(tmp_path):
+    # last_drain is what the CLI prints from; a stale value would announce a
+    # drain that did not happen on this call.
+    provider = durable(tmp_path, Recorder())
+    provider.add("Nothing queued.", scope=Scope.REPOSITORY, scope_key="r")
+    assert provider.last_drain is None
+
+
+def test_last_drain_is_cleared_between_calls(tmp_path):
+    queued(tmp_path)
+    provider = durable(tmp_path, Recorder())
+    provider.add("First.", scope=Scope.REPOSITORY, scope_key="r")
+    assert provider.last_drain is not None
+    provider.add("Second, with an empty queue.", scope=Scope.REPOSITORY, scope_key="r")
+    assert provider.last_drain is None
+
+
+def test_a_queued_write_does_not_trigger_a_drain(tmp_path):
+    # Only a SUCCESS is evidence the provider works. Draining after a failure
+    # would retry the whole backlog against something known to be broken, and
+    # burn an attempt on every entry.
+    queued(tmp_path)
+    provider = durable(tmp_path, Recorder(error=Mem0Error("down", code="provider_unavailable")))
+    with pytest.raises(WriteQueued):
+        provider.add("Also fails.", scope=Scope.REPOSITORY, scope_key="r")
+    assert Spool(root=tmp_path).entries()[0].attempts == 0, "no attempt should have been burned"
+
+
+def test_auto_drain_can_be_turned_off(tmp_path):
+    queued(tmp_path)
+    inner = Recorder()
+    provider = DurableProvider(inner, user="lautaro", spool=Spool(root=tmp_path), auto_drain=False)
+    provider.add("Mine.", scope=Scope.REPOSITORY, scope_key="r")
+    assert len(list(tmp_path.glob("*.json"))) == 1
+
+
 def test_reads_are_not_wrapped_and_not_queued(tmp_path):
     # Deliberate asymmetry: a failed search costs a retry, a failed write costs
     # the memory. Only writes get the machinery.
