@@ -202,3 +202,4 @@ testing.ipynb
 
 # Local TLS-interception roots, machine-specific
 server/certs/*.crt
+server/dashboard/certs/*.crt
