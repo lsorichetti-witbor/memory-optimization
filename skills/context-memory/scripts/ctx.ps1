@@ -168,12 +168,20 @@ function Show-Backlog {
 $ApiPort = Get-EnvValue -Name 'MEM0_API_PORT' -Default '8888'
 $env:MEM0_API_URL = "http://localhost:$ApiPort"
 $env:MEM0_API_KEY = Get-EnvValue -Name 'ADMIN_API_KEY'
-# From server/.env, not from $env:USERNAME. MEM0_USER is part of the search
-# filter: pick it up from the machine account and every memory written under a
-# different identity becomes invisible, with the search returning nothing at all
-# rather than an error. Measured: searching as "Witbor" for memories stored as
-# "lautaro" returned 0 of 10 twice, with no indication why.
-$env:MEM0_USER = Get-EnvValue -Name 'MEM0_USER' -Default $env:USERNAME
+# Identity precedence: an explicitly set MEM0_USER, then server/.env, then the
+# machine account.
+#
+# The machine account is last for a measured reason: MEM0_USER is part of the
+# search filter, so picking it up from $env:USERNAME writes memories under an
+# identity nothing later queries, and the search returns nothing at all rather
+# than an error. Searching as "Witbor" for memories stored as "lautaro" returned
+# 0 of 10 twice, with no indication why.
+#
+# But .env used to win over an explicit value too, and that is a different
+# thing: it meant a second person on one machine could not write as themselves -
+# their memory silently landed under whoever .env named. An explicit MEM0_USER
+# is a deliberate statement of identity and outranks the file.
+$env:MEM0_USER = if ($env:MEM0_USER) { $env:MEM0_USER } else { Get-EnvValue -Name 'MEM0_USER' -Default $env:USERNAME }
 
 $RepoKey = Get-RepoKey
 $env:MEM0_REPOSITORY = $RepoKey

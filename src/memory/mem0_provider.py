@@ -8,6 +8,7 @@ running server's `/openapi.json`. Auth is the `X-API-Key` header
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Optional, Sequence
 
@@ -194,13 +195,41 @@ class Mem0Provider(MemoryProvider):
         body.update(self._identifiers(scope, scope_key))
 
         payload = self._request("POST", "/memories", json=body) or {}
+
+        if payload.get("queued"):
+            # 202: the server could not embed it right now but has it durably in
+            # its own queue, and will. That is an accepted write, not a failed
+            # one - treating the empty `results` as a failure made the caller
+            # spool a second copy locally, told the user it was not stored, and
+            # left an entry that every replay would recreate rather than clear.
+            return [
+                MemoryRecord(
+                    id=str(payload.get("pending_id") or ""),
+                    text=text,
+                    envelope=replace(
+                        envelope,
+                        extra={
+                            **envelope.extra,
+                            "queued_server_side": True,
+                            "queued_reason": payload.get("reason") or "",
+                            "queued_code": payload.get("code") or "",
+                        },
+                    ),
+                )
+            ]
+
         rows = payload.get("results") or []
         if not rows:
             # An empty results array means nothing was stored. Returning [] here
             # would make a failed write look exactly like a successful one.
+            hint = (
+                " With infer=True this usually means the extraction LLM found no fact in the text."
+                if infer
+                else ""
+            )
             raise RuntimeError(
-                f"Mem0 accepted the request but stored no memories for scope {scope.value}:{scope_key}. "
-                "With infer=True this usually means the extraction LLM found no fact in the text."
+                f"Mem0 accepted the request but stored no memories for scope "
+                f"{scope.value}:{scope_key}.{hint}"
             )
         return [self._to_record(row) for row in rows]
 

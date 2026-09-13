@@ -123,7 +123,20 @@ with the provider down:
 docker compose --project-directory server exec -T mem0 python - < scripts/test-pending-queue.py
 ```
 
-25 checks. To measure whether selection is still earning its place:
+29 checks.
+
+And the whole path a write takes, driven through the launcher from directories
+standing in for separate checkouts, as a person or an agent would:
+
+```powershell
+.\scripts	est-end-to-end.ps1
+```
+
+20 checks: server down, server up with the embedder refusing, the auto-drain,
+flush, scope isolation, and visibility. Phases that need a working embedder are
+reported as **BLOCKED, never as passed** when it is unavailable.
+
+To measure whether selection is still earning its place:
 
 ```powershell
 & "$env:USERPROFILE\.claude\skills\context-memory\scripts\ctx.ps1" eval

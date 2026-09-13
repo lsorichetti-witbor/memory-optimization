@@ -141,6 +141,29 @@ def main() -> int:
         check("attempts accumulate rather than resetting", db.get(PendingMemory, row.id).attempts >= 3, state)
         clean(db)
 
+    # -- a queued row must record the attempt that put it there --------------
+    with SessionLocal() as db:
+        clean(db)
+        failed = pending.enqueue(
+            db, text=f"{PREFIX} refused inline", payload={"user_id": "queuecheck"},
+            idempotency_key=f"qc-{uuid.uuid4().hex[:10]}",
+            error="quota gone", error_code="provider_quota_exhausted",
+        )
+        row = db.get(PendingMemory, failed.id)
+        check("a refused inline embed lands in error, not pending", row.state == "error", row.state)
+        check("and carries the attempt it already made", row.attempts == 1, f"attempts={row.attempts}")
+        check("and is not claimable until its backoff passes", not mine(pending.claim_batch(db, limit=5)))
+        clean(db)
+
+        untried = pending.enqueue(
+            db, text=f"{PREFIX} never tried", payload={"user_id": "queuecheck"},
+            idempotency_key=f"qc-{uuid.uuid4().hex[:10]}",
+        )
+        row = db.get(PendingMemory, untried.id)
+        check("a row with no error starts pending with no attempts",
+              row.state == "pending" and row.attempts == 0, f"{row.state}/{row.attempts}")
+        clean(db)
+
     # -- ordering -----------------------------------------------------------
     print("\nordering")
     with SessionLocal() as db:

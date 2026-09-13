@@ -210,7 +210,8 @@ any caller
       200 ──→ delete spool entry         ▼
                               ┌──────────────────────────────┐  covers:
                               │ 2. pending_memories row       │  "took it, could
-                              │    202 → client deletes its   │   not embed it"
+                              │    state='error', attempt 1   │   not embed it"
+                              │    202 → client deletes its   │
                               │    spool entry and is done    │
                               └───────────┬──────────────────┘
                                           ▼
@@ -260,6 +261,12 @@ Four states, and `pending` vs `error` is the distinction the design turns on:
 | `embedding` | a worker holds it now (`claimed_by` + `lease_until`) | only if the lease expired or is implausible |
 | `error` | the provider refused | yes, once its backoff passes |
 | `dead` | out of attempts (12) | **no** — waits for a person, never deleted |
+
+A row enqueued by `POST /memories` lands in **`error` with one attempt**, not
+`pending`: it only reached the queue because the inline embed was refused, so
+the attempt happened and the state has to say so. Recording it as `pending`
+claimed nobody had tried while `last_error_code` sat populated beside it, hid
+the first attempt from the count, and left the row out of the sweep below.
 
 **Why the split:** when any embedding succeeds, every `error` row is swept back
 to `pending` and its backoff discarded. That success is fresh evidence the

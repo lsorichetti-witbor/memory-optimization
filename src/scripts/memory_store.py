@@ -90,8 +90,28 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         provider.close()
 
-    lines = [f"stored {r.id}: {r.text}" for r in records]
-    payload: dict | list = [{"id": r.id, "text": r.text} for r in records]
+    # A write the server queued is accepted and safe, but it is NOT searchable
+    # yet. Printing "stored" for it would be the one lie this whole layer exists
+    # to avoid - the caller would move on believing they can find it.
+    queued_remotely = [r for r in records if r.envelope.extra.get("queued_server_side")]
+    if queued_remotely:
+        reason = queued_remotely[0].envelope.extra.get("queued_reason") or "the embedder was unavailable"
+        lines = [
+            f"accepted {r.id}: {r.text}" for r in queued_remotely
+        ] + [
+            "",
+            "NOT searchable yet: the server queued it for embedding.",
+            f"  reason: {reason}",
+            "  watch:  ctx health   |   <dashboard>/dashboard/queue",
+        ]
+        payload: dict | list = {
+            "accepted": [{"pending_id": r.id, "text": r.text} for r in queued_remotely],
+            "searchable": False,
+            "reason": reason,
+        }
+    else:
+        lines = [f"stored {r.id}: {r.text}" for r in records]
+        payload = [{"id": r.id, "text": r.text} for r in records]
 
     # A successful write drains whatever was queued. Say so: a command that
     # quietly did ten times the work it was asked to do is a mystery pause, and
@@ -101,7 +121,7 @@ def main(argv: list[str] | None = None) -> int:
         lines.append(f"backlog: {drain.summary()}")
         if drain.outstanding:
             lines.append(f"  {drain.outstanding} still queued - python -m src.scripts.memory_flush")
-        payload = {"stored": payload, "backlog": {
+        payload = {"result": payload, "backlog": {
             "total": drain.total,
             "replayed": drain.replayed,
             "already_stored": drain.already_stored,

@@ -84,21 +84,38 @@ def enqueue(
     Returns the existing row when the idempotency key is already queued, rather
     than raising: a client retrying a request whose response it never saw is the
     normal case, not an error.
+
+    A row that arrives WITH an error has already been attempted - `POST /memories`
+    embeds inline first, and this is only reached when that attempt was refused.
+    So it lands in `error` with one attempt against it, not in `pending`.
+    Recording it as `pending` said "nobody has tried yet" beside a populated
+    `last_error_code`, which contradicts what the state means, hid the first
+    attempt from the count, and left the row out of the sweep that re-arms
+    everything that failed for the same reason when some other write succeeds.
+
+    A row with no error attached has genuinely not been tried, and starts in
+    `pending`.
     """
     existing = find_existing(db, idempotency_key)
     if existing is not None:
         return existing
 
+    attempted = bool(error or error_code)
+    now = _utcnow()
     row = PendingMemory(
-        state=PENDING,
+        state=ERROR if attempted else PENDING,
         text=text,
         payload=payload,
         content_hash=content_hash(text),
         idempotency_key=idempotency_key,
         last_error=error[:2000] or None,
         last_error_code=error_code or None,
-        next_attempt_at=_utcnow(),
-        source_created_at=source_created_at(payload) or _utcnow(),
+        attempts=1 if attempted else 0,
+        # The same backoff a worker failure would earn, for the same reason: the
+        # provider just refused, so trying again immediately would only refuse
+        # again. The success sweep and Send all both bypass it.
+        next_attempt_at=(now + _backoff(1)) if attempted else now,
+        source_created_at=source_created_at(payload) or now,
     )
     db.add(row)
     db.commit()
