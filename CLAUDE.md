@@ -40,7 +40,7 @@ Quick start on a machine that is already set up:
 | `src/evaluation/` | Retrieval benchmark: five arms, metrics, seeded dataset |
 | `src/scripts/` | CLI entry points |
 | `skills/context-memory/` | The skill and its `ctx.ps1` launcher |
-| `tests/context_memory/` | 276 tests; 2 require a live server |
+| `tests/context_memory/` | 289 tests; 2 require a live server |
 | `docs/superpowers/plans/` | The implementation plan and its execution log |
 
 ## Rules that apply when working on this code
@@ -72,14 +72,25 @@ Quick start on a machine that is already set up:
 .\.venv\Scripts\python.exe -m pytest tests/context_memory -q
 ```
 
-276 tests. The 2 integration tests need `MEM0_API_URL` / `MEM0_API_KEY` /
+289 tests. The 2 integration tests need `MEM0_API_URL` / `MEM0_API_KEY` /
 `MEM0_USER` set — **a skip there is a failure of the check, not a pass.**
 
-If they fail with `502: Upstream provider error`, read the container log before
-assuming a code defect: `docker compose logs mem0 --since 5m`. The Gemini free
-tier allows 1,000 embedding requests per day, and a few wipe/re-seed/benchmark
-cycles exhaust it. Every write and every search needs an embedding, so the whole
-memory layer stops until the quota resets.
+A 502 now names its own cause, so read the message before suspecting the code:
+
+```
+Provider quota exhausted for the day:
+generativelanguage.googleapis.com/embed_content_free_tier_requests,
+limit 1000 (model gemini-embedding-1.0). Retrying will not help until the
+quota resets.
+```
+
+The Gemini free tier allows 1,000 embedding requests per day, and a few
+wipe/re-seed/benchmark cycles exhaust it. Every write and every search needs an
+embedding, so the whole memory layer stops until it resets. A bare
+`502: Upstream provider error.` with no reason means the classifier in
+`server/errors.py` did not recognise the exception — that is the bug to fix, not
+the symptom to work around; `docker compose logs mem0 --since 5m` has the
+original traceback.
 
 The embedder and the LLM are separate legs: tests default to `infer=False` and
 exercise only the embedder. Verify the LLM path explicitly with

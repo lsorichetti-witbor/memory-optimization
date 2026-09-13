@@ -3,3 +3,10 @@
 # only when importable and falls back to a heuristic counter otherwise.
 httpx>=0.28.0
 pytest>=8.2.2
+
+# For tests/context_memory/test_server_errors.py only. It classifies real
+# provider exceptions, so it builds the real classes rather than stand-ins: a
+# hand-rolled double cannot notice when an SDK moves the attribute the
+# classifier reads, which is exactly the defect that test exists to catch.
+fastapi>=0.115.0
+google-genai>=1.0.0

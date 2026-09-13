@@ -25,10 +25,94 @@ _DB_NAMES = {"OperationalError", "DBAPIError", "DisconnectionError"}
 _VECTOR_NAMES = {"UnexpectedResponse", "ResponseHandlingException"}
 
 
+def _http_status(exc: BaseException) -> int | None:
+    """The provider's HTTP status, whatever the SDK calls the attribute.
+
+    OpenAI puts it on `status_code`; google-genai's APIError uses `code` and
+    reserves `status` for the string enum ("RESOURCE_EXHAUSTED"). Reading only
+    `status_code` classified every Gemini failure as `unknown`, which is how a
+    daily quota exhaustion reached the caller as a bare "Upstream provider
+    error." with the real reason visible only in the container log.
+    """
+    for attribute in ("status_code", "code"):
+        value = getattr(exc, attribute, None)
+        # `code` carries other things on other libraries - a str on the OpenAI
+        # SDK ("rate_limit_exceeded"), a str on SQLAlchemy ("e3q8"), an errno on
+        # OSError. Require an int in the HTTP range so those cannot be mistaken
+        # for a status and misclassified into a confident wrong message.
+        if isinstance(value, bool) or not isinstance(value, int):
+            continue
+        if 100 <= value <= 599:
+            return value
+    return None
+
+
+def _quota_violations(exc: BaseException) -> list[dict]:
+    """The QuotaFailure violations google-genai attaches to a 429, if any.
+
+    Defensive throughout: this runs inside an exception handler, and a payload
+    shape that surprises it must degrade to "no facts" rather than raise a
+    second error on top of the first.
+    """
+    details = getattr(exc, "details", None)
+    if isinstance(details, list) and len(details) == 1:
+        details = details[0]
+    if not isinstance(details, dict):
+        return []
+    inner = details.get("error", details)
+    if not isinstance(inner, dict):
+        return []
+    found: list[dict] = []
+    for entry in inner.get("details", []) or []:
+        if not isinstance(entry, dict):
+            continue
+        if not str(entry.get("@type", "")).endswith("QuotaFailure"):
+            continue
+        for violation in entry.get("violations", []) or []:
+            if isinstance(violation, dict):
+                found.append(violation)
+    return found
+
+
+def _describe_quota(violations: list[dict]) -> tuple[str, str]:
+    """Turn the violations into a code and a message that names the real limit.
+
+    The window matters more than the number. Google returns `retryDelay: 2s` on
+    a *daily* exhaustion too, so "retry shortly" - which is what a plain 429
+    maps to - tells the caller to do the one thing that cannot work for the next
+    several hours. Only a per-day quotaId justifies saying the quota is spent.
+    """
+    first = violations[0]
+    metric = str(first.get("quotaMetric") or "unknown metric")
+    limit = first.get("quotaValue")
+    quota_id = str(first.get("quotaId") or "")
+    dimensions = first.get("quotaDimensions")
+    model = dimensions.get("model") if isinstance(dimensions, dict) else None
+
+    where = f"{metric}, limit {limit}" if limit is not None else metric
+    if model:
+        where += f" (model {model})"
+
+    if "perday" in quota_id.replace("_", "").lower():
+        return (
+            "provider_quota_exhausted",
+            f"Provider quota exhausted for the day: {where}. Retrying will not help "
+            f"until the quota resets. Raise the limit or switch provider.",
+        )
+    # The window is not stated. Say so rather than picking one: guessing "daily"
+    # stalls a caller who could have retried, and guessing "shortly" sends a
+    # caller into a retry loop that cannot succeed.
+    return (
+        "provider_rate_limited",
+        f"Provider quota exceeded: {where}. The response did not say over what "
+        f"window, so retry once before assuming the allowance is spent.",
+    )
+
+
 def _classify_one(exc: BaseException) -> tuple[str, str]:
     name = type(exc).__name__
     module = getattr(type(exc), "__module__", "") or ""
-    status = getattr(exc, "status_code", None)
+    status = _http_status(exc)
 
     if name in _AUTH_NAMES or status in (401, 403):
         return (
@@ -37,6 +121,9 @@ def _classify_one(exc: BaseException) -> tuple[str, str]:
             "Check your LLM provider API key on the Configuration page.",
         )
     if name in _RATE_NAMES or status == 429:
+        violations = _quota_violations(exc)
+        if violations:
+            return _describe_quota(violations)
         return ("provider_rate_limited", "Provider rate limit hit. Retry shortly.")
     if name in _TIMEOUT_NAMES or isinstance(exc, TimeoutError):
         return ("provider_timeout", "Provider timed out. Retry shortly.")
