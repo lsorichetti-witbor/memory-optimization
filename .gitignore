@@ -208,3 +208,9 @@ server/dashboard/certs/*.crt
 # died in, so match at any depth rather than only at the root.
 bash.exe.stackdump
 **/*.stackdump
+
+# Memory backups are data, not source. The versioned, reproducible copy is
+# src/evaluation/global_seed.py and src/evaluation/seed.py; a dump here is a
+# point-in-time export of one machine's store and can contain anything the
+# user chose to remember.
+backups/*.json

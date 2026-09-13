@@ -91,7 +91,7 @@ Plus four retrieval findings learned since.
 `src/evaluation/global_seed.py`, restored with:
 
 ```powershell
-.\.venv\Scripts\python.exe -m src.scripts.memory_seed --shared
+.\.venv\Scripts\python.exe -m src.scripts.memory_seed --global
 ```
 
 That matters more than it looks. After this refactor the rules stayed in
@@ -101,7 +101,7 @@ put the sole copy somewhere nothing backs up. Verified by wiping the store
 entirely and restoring from code: 16 memories back, benchmarks unchanged.
 
 **Retrieval verified, not assumed** — each returns its own incident from the
-shared scope at 0.70–0.76, against a ~0.50 noise floor:
+global scope at 0.70–0.76, against a ~0.50 noise floor:
 
 ```
 "why must a truncated report print its denominator"   → 0.704  rule.truncated_output
@@ -180,7 +180,7 @@ EXIT=0
 
 `~/.claude/CLAUDE.md` 15,273 -> 12,366 chars; `rules/graphify.md` created and
 `@rules/graphify.md` resolving. The extracted evidence still answers from the
-shared scope after the swap (`rule.truncated_output` at 0.658).
+global scope after the swap (`rule.truncated_output` at 0.658).
 
 Rollback, if a rule turns out to be missed in practice:
 

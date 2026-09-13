@@ -62,7 +62,7 @@
 - **Batch review findings into one fix round.** Applying them one at a time multiplies dispatch, verification and re-review overhead by the number of findings, and each round risks stale context. Collect, decide, then fix once.
 
 # Context memory
-- **context-memory** skill (`~/.claude/skills/context-memory/SKILL.md`) — self-hosted Mem0 + Context Manager. Reads cover this repo plus the shared scope automatically. **Writes: always ask which scope** (`repo` vs `shared`) before storing — a repo fact written to `shared` surfaces on unrelated projects as universal truth, and nothing about the write looks wrong at the time.
+- **context-memory** skill (`~/.claude/skills/context-memory/SKILL.md`) — self-hosted Mem0 + Context Manager. Reads cover this repo plus the global scope automatically. **Writes go to this repository by default**; use `-Scope global` only when asked for it, because a repo fact written to `global` surfaces on unrelated projects as universal truth and nothing about the write looks wrong at the time. Do not reach for `global` to be safe — it is the unsafe direction.
 - Requires the stack up: `& 'D:\Desktop D\Gestión\memory-optimization\scripts\stack.ps1' up`
 - Historical incidents behind the invariants above live in Mem0 at `global` scope (`kind=incident`). Search them when a rule's reasoning matters: `& $ctx search -Query "<topic>"`.
 

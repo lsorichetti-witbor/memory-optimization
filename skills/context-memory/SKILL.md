@@ -39,23 +39,33 @@ If `health` shows `API: down`, start the stack first — the command it prints.
 
 ## Scope rules — the part to get right
 
-**Reading is automatic: this repository AND the shared scope, every time.**
+**Reading is automatic: this repository AND the global scope, every time.**
 A lesson worth remembering everywhere is useless if it only surfaces where it
 was learned, so `search` queries both and labels each result set.
 
-**Writing is never guessed. ASK THE USER which scope before storing.**
+**Writing defaults to THIS repository.** `store` with no `-Scope` writes to the
+repo you are in. Use it freely — that is the common case and it needs no
+ceremony.
 
-| Choose | When | Example |
+**`-Scope global` is opt-in, and only when the user asks for it.** Words like
+"remember this everywhere", "globally", "global", "for all projects", or a fact
+that is plainly about a tool rather than this codebase.
+
+| Scope | When | Example |
 |---|---|---|
-| `-Scope repo` | The fact is about *this codebase* | "server/AGENTS.md documents a Neo4j service that docker-compose.yaml does not define" |
-| `-Scope shared` | The fact holds anywhere | "FastAPI silently ignores query parameters not in the endpoint signature" |
+| default (`repository`) | anything about *this codebase* | "server/AGENTS.md documents a Neo4j service that docker-compose.yaml does not define" |
+| `-Scope global` | the user asked for it, or it plainly holds anywhere | "FastAPI silently ignores query parameters not in the endpoint signature" |
 
-Getting this wrong is not loud. A repository fact written to the shared scope
-surfaces on unrelated projects as if it were universal truth, and nothing about
-the write looks wrong at the time. `store` refuses to run without an explicit
-`-Scope` for exactly that reason — do not paper over it by always picking one.
+The two mistakes are not symmetric, which is why the default is what it is:
 
-When in doubt, ask: *"Is this true of this repo, or true everywhere?"*
+- A general lesson stuck in one repo is **missed elsewhere** — annoying, and
+  fixable later by re-storing it to `global`.
+- A repo-specific fact written to `global` **surfaces on unrelated projects as
+  universal truth**, and nothing about the write looks wrong at the time.
+
+So the default fails toward under-sharing. When unsure, store to the repo and
+say you did; do not reach for `global` to be safe, because it is the unsafe one.
+`store -Scope global` prints a warning naming what it is about to do.
 
 ## Operations
 
@@ -88,7 +98,7 @@ The report always prints denominators, e.g. `42 of 492 candidates injected
 & $ctx search -Query "line endings" -TopK 3
 ```
 
-Always searches this repo **and** shared. If both come back empty it says so and
+Always searches this repo **and** `global`. If both come back empty it says so and
 names the two things that silently cause it — a wrong identity or a wrong repo
 key — because an empty result and a wrong lookup look identical.
 
@@ -101,12 +111,12 @@ pick the number from your own data rather than inheriting one.
 ### Store a memory
 
 ```powershell
-# about this codebase
-& $ctx store -Scope repo -Kind discovery -Topic server.graph_store `
+# this repository - the default, no -Scope needed
+& $ctx store -Kind discovery -Topic server.graph_store `
   -Text "server/AGENTS.md documents Neo4j on ports 8474/8687 but docker-compose.yaml defines no such service."
 
-# true anywhere
-& $ctx store -Scope shared -Kind lesson -Topic tooling.fastapi_query_params `
+# everywhere - only when the user asked for it
+& $ctx store -Scope global -Kind lesson -Topic tooling.fastapi_query_params `
   -Text "FastAPI silently ignores query parameters not in the endpoint signature, so an unsupported filter looks like it works and does nothing."
 ```
 
@@ -188,8 +198,10 @@ Seeds known memories, runs five arms, prints a methodology block. Retrieval-only
    [memory-policy.md](references/memory-policy.md).
 4. **Do not store every observation.** Memories enter as `candidate`. Promotion
    is deliberate.
-5. **Never report a retrieval number without its denominator.**
-6. **Conflict detection has a named blind spot.** A memory contradicting the
+5. **Writes go to this repository unless the user asks for `global`.** Do not
+   default to `global` to be safe - it is the unsafe direction.
+6. **Never report a retrieval number without its denominator.**
+7. **Conflict detection has a named blind spot.** A memory contradicting the
    repo while sharing no `topic` is not detected; the report counts those as
    `unchecked`. Zero conflicts is not the same as agreement. See
    [context-precedence.md](references/context-precedence.md).

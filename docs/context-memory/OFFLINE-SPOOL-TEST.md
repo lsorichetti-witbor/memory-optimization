@@ -24,7 +24,7 @@ store  ──►  server reachable?  ──yes──►  stored
            flush  ──►  replay oldest-first  ──►  delete file ONLY on success
 ```
 
-One spool serves **every repository, the shared scope, and every user on the
+One spool serves **every repository, the global scope, and every user on the
 machine**. A per-repo queue would strand a memory in whichever checkout you
 happened to be in, and you would never think to look there. Entries carry their
 own scope, scope key, user and timestamp, so one directory is enough.
@@ -60,7 +60,7 @@ spool:            1 queued  (C:\Users\...\context-memory\spool)
 
 ## 2. The test
 
-`scripts/test-offline-spool.ps1`. Two users × three repositories × the shared
+`scripts/test-offline-spool.ps1`. Two users × three repositories × the global
 scope, across four phases. It uses an isolated `CONTEXT_MEMORY_SPOOL` so it can
 never touch the real queue.
 
@@ -71,9 +71,9 @@ between them is detectable by substring rather than by count:
 |---|---|---|---|---|
 | 1 | lautaro | repository | repo-alpha | `alpha.build` |
 | 2 | lautaro | repository | repo-beta | `beta.storage` |
-| 3 | lautaro | global | global | `shared.exitcodes` |
+| 3 | lautaro | global | global | `global.exitcodes` |
 | 4 | teammate | repository | repo-alpha | `alpha.reviews` |
-| 5 | teammate | global | global | `shared.tls` |
+| 5 | teammate | global | global | `global.tls` |
 
 "Server down" is simulated by pointing `MEM0_API_URL` at a closed port
 (`localhost:59999`) — a real connection refusal, not a mock.
@@ -93,7 +93,7 @@ between them is detectable by substring rather than by count:
 | teammate → global:global | exit 3, queued | exit 3 | PASS |
 | spool file count | 5 files | 5 files | PASS |
 | users kept apart | `lautaro,teammate` | `lautaro,teammate` | PASS |
-| all repos + shared in one spool | `global:global repository:repo-alpha repository:repo-beta` | identical | PASS |
+| all repos + global in one spool | `global:global repository:repo-alpha repository:repo-beta` | identical | PASS |
 | every entry timestamped | 5 | 5 | PASS |
 
 Exit code **3** is distinct from `1` (bad write) and `2` (bad configuration), so
@@ -118,10 +118,10 @@ under the right user, and nowhere else.
 | lautaro sees repo-alpha | contains "node 20" | found | PASS |
 | lautaro sees repo-beta | contains "S3" | found | PASS |
 | **repo-beta memory NOT in repo-alpha** | no "2GB row incident" | isolated | PASS |
-| lautaro sees shared scope | contains "pager" | found | PASS |
+| lautaro sees global scope | contains "pager" | found | PASS |
 | teammate sees own repo-alpha memory | contains "two approvals" | found | PASS |
 | **teammate does NOT see lautaro's memory** | no "native addon" | isolated | PASS |
-| teammate sees own shared memory | contains "CERTIFICATE_VERIFY_FAILED" | found | PASS |
+| teammate sees own global memory | contains "CERTIFICATE_VERIFY_FAILED" | found | PASS |
 
 Both users wrote into `repo-alpha`, and each sees only their own — `user_id` is
 part of the filter, which is also why each entry is replayed **as its own
@@ -153,7 +153,7 @@ became `DELETE /memories?user_id=lautaro` and removed **every memory that user
 had, in every scope.**
 
 Measured, destructively: the seeded evaluation set went from 5 memories to 0
-while the caller had asked only for the shared scope. Nothing errored.
+while the caller had asked only for the global scope. Nothing errored.
 
 **Fix:** `delete_all` no longer uses the bulk endpoint. It enumerates the scope —
 a listing that is already scope-filtered client-side — and deletes by id. Slower,
@@ -169,8 +169,8 @@ intact.
 
 ### The test itself was destroying real data
 
-Even with `delete_all` fixed, cleaning up by *scope* wiped the real shared
-memories, because the test writes into the same shared scope a human uses. The
+Even with `delete_all` fixed, cleaning up by *scope* wiped the real global
+memories, because the test writes into the same global scope a human uses. The
 harness now cleans up **by topic**, deleting only the five fixtures it created.
 
 Worth stating plainly: a test that tidies up by scope is indistinguishable from

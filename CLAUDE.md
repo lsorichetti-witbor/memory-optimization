@@ -57,8 +57,8 @@ Quick start on a machine that is already set up:
    contradiction with no shared `topic`, so the report counts those as
    `unchecked` rather than implying agreement. Anything with a blind spot
    reports the size of it.
-5. **Writes ask for their scope.** `repo` vs `shared` is never guessed — a
-   repository fact written to the shared scope surfaces on unrelated projects as
+5. **Writes ask for their scope.** `repository` vs `global` is never guessed — a
+   repository fact written to the global scope surfaces on unrelated projects as
    universal truth, and nothing about the write looks wrong at the time.
 6. **The scoring weights are unmeasured.** They default to 1.0 and are
    documented as placeholders. Change them when the evaluation harness says to,

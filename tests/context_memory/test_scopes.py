@@ -86,3 +86,44 @@ def test_selector_exposes_the_key_for_each_scope_it_will_query():
     assert selector.key_for(Scope.USER) == "lautaro"
     assert selector.key_for(Scope.GLOBAL) == "global"
     assert selector.key_for(Scope.PROJECT) is None
+
+
+def test_every_scope_produces_an_agent_id():
+    # Without one, a global memory has only a user_id: it cannot be narrowed
+    # server-side, it forms no entity of its own in the dashboard, and the bulk
+    # delete endpoint cannot address it without hitting every other scope the
+    # user owns. Measured before this: 11 shared memories were visible only
+    # inside "user lautaro: 16".
+    for scope, key in (
+        (Scope.GLOBAL, "global"),
+        (Scope.USER, "lautaro"),
+        (Scope.PROJECT, "gestion"),
+        (Scope.REPOSITORY, "memory-optimization"),
+        (Scope.BRANCH, "main"),
+        (Scope.SESSION, "s1"),
+        (Scope.TASK, "t1"),
+    ):
+        ids = scope_identifiers(scope, key=key, user="lautaro", repository="memory-optimization")
+        assert ids.get("agent_id"), f"{scope.value} produced no agent_id: {ids}"
+
+
+def test_the_global_scope_agent_is_the_same_for_every_user():
+    # Shared knowledge is shared. Keying the agent per user would split one
+    # shared scope into one per person.
+    a = scope_identifiers(Scope.GLOBAL, key="global", user="lautaro")
+    b = scope_identifiers(Scope.GLOBAL, key="global", user="someone-else")
+    assert a["agent_id"] == b["agent_id"] == "global"
+
+
+def test_the_user_scope_agent_names_the_user():
+    ids = scope_identifiers(Scope.USER, key="lautaro", user="lautaro")
+    assert ids["agent_id"] == "user:lautaro"
+
+
+def test_a_task_still_carries_its_repository_agent_not_a_task_agent():
+    # Unchanged on purpose: a task memory has to stay visible to a
+    # repository-wide query, so the agent names the repository and run_id
+    # carries the task.
+    ids = scope_identifiers(Scope.TASK, key="t1", user="u", repository="memory-optimization")
+    assert ids["agent_id"] == "repo:memory-optimization"
+    assert ids["run_id"] == "task:t1"

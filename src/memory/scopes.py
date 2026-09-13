@@ -46,8 +46,13 @@ class Scope(str, Enum):
 SCOPES: tuple[str, ...] = tuple(s.value for s in Scope.ordered())
 
 # Which Mem0 identifier carries each scope, and how its key is prefixed.
-_AGENT_PREFIX = {Scope.PROJECT: "project:", Scope.REPOSITORY: "repo:"}
+_AGENT_PREFIX = {Scope.PROJECT: "project:", Scope.REPOSITORY: "repo:", Scope.USER: "user:"}
 _RUN_PREFIX = {Scope.BRANCH: "branch:", Scope.SESSION: "session:", Scope.TASK: "task:"}
+
+# The global scope's agent. A constant rather than a per-user value: knowledge at
+# this scope belongs to everyone, and keying it per user would split one scope
+# into one per person.
+GLOBAL_AGENT = "global"
 
 
 def scope_identifiers(
@@ -67,7 +72,13 @@ def scope_identifiers(
 
     ids: dict[str, str] = {"user_id": user}
 
-    if scope in _AGENT_PREFIX:
+    # Every scope gets an agent_id. Without one, a global memory carried only a
+    # user_id: it could not be narrowed server-side, formed no entity of its own
+    # in the dashboard, and the bulk delete endpoint could not address it without
+    # hitting every other scope that user owned.
+    if scope is Scope.GLOBAL:
+        ids["agent_id"] = GLOBAL_AGENT
+    elif scope in _AGENT_PREFIX:
         ids["agent_id"] = f"{_AGENT_PREFIX[scope]}{key}"
     elif scope in _RUN_PREFIX:
         ids["run_id"] = f"{_RUN_PREFIX[scope]}{key}"

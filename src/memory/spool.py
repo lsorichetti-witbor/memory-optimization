@@ -10,7 +10,7 @@ Three properties it has to have, each because the alternative fails silently:
 **One shared location for every repository and scope.** A per-repo spool would
 strand a memory in whichever checkout you happened to be in, and you would never
 think to look there. Entries carry their own scope, scope key and user, so one
-directory serves every repo, the shared scope, and every user on the machine.
+directory serves every repo, the global scope, and every user on the machine.
 
 **The original timestamp survives.** Replaying with the replay time as
 `created_at` would make a month-old memory look brand new, and recency is a

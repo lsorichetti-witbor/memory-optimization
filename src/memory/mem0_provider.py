@@ -182,7 +182,7 @@ class Mem0Provider(MemoryProvider):
         The triple alone does not isolate every scope: `scope_identifiers` emits
         only `user_id` for GLOBAL, so a global search filtered by user and
         returned every repository-scoped memory that user had ever written.
-        Measured: a shared-scope query came back with all 5 memories belonging to
+        Measured: a global-scope query came back with all 5 memories belonging to
         one repository, and the leak was indistinguishable from a relevant hit.
 
         `scope` and `scope_key` are written into metadata on every add, and Mem0
@@ -269,7 +269,7 @@ class Mem0Provider(MemoryProvider):
         `user_id` for the GLOBAL scope - so deleting "global" sent
         `DELETE /memories?user_id=<user>` and removed everything that user had in
         every scope. Measured destructively: it wiped a seeded evaluation set
-        while the caller had asked only for the shared scope.
+        while the caller had asked only for the global scope.
 
         Enumerating and deleting by id is slower and cannot over-reach: the
         listing is already scope-filtered client-side.

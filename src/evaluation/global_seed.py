@@ -1,4 +1,4 @@
-"""The shared-scope memories: engineering lessons that hold anywhere.
+"""The global-scope memories: engineering lessons that hold anywhere.
 
 Two groups live here.
 
@@ -24,60 +24,60 @@ from dataclasses import dataclass
 from src.memory.base import MemoryProvider
 from src.memory.scopes import Scope
 
-SHARED_SCOPE_KEY = "global"
+GLOBAL_SCOPE_KEY = "global"
 
 
 @dataclass(frozen=True)
-class SharedMemory:
+class GlobalMemory:
     topic: str
     kind: str
     text: str
     importance: float = 0.8
 
 
-RULE_INCIDENTS: tuple[SharedMemory, ...] = (
-    SharedMemory(
+RULE_INCIDENTS: tuple[GlobalMemory, ...] = (
+    GlobalMemory(
         "rule.shortened_identifier", "incident",
         "Left-truncating identifiers that share a long generated prefix collapsed distinct objects "
         "into one label: measured on one corpus, three different files rendered as the identical "
         "string, and a pair printed as an item paired with itself. This is the evidence behind the "
         "CLAUDE.md rule that a shortened identifier must resolve back to exactly one object.",
     ),
-    SharedMemory(
+    GlobalMemory(
         "rule.truncated_output", "incident",
         "A report showing the top 10 of 53 record types hid 17 that had real activity but no "
         "deployments, because the ranking dimension could not reach rows scoring zero on it. This "
         "is the evidence behind the CLAUDE.md rule that truncated output must print its denominator "
         "and, where excluded rows matter, a second view ranked so they can appear.",
     ),
-    SharedMemory(
+    GlobalMemory(
         "rule.multi_value_field", "incident",
         "A pipe-delimited multi-value field keyed raw made every membership query match only rows "
         "whose value was exactly that combination: 'which deployments run in the UI' returned 2 of "
         "96. This is the evidence behind the CLAUDE.md rule to establish a field's cardinality "
         "before it becomes a key, and to split on ingest.",
     ),
-    SharedMemory(
+    GlobalMemory(
         "rule.relation_fan_in", "incident",
         "A relation that was 1:1 by construction yielded a flag rather than a quantity, so a delete "
         "count maxed out at 1 and reported 10 where the truth was 17. This is the evidence behind "
         "the CLAUDE.md rule to check maximum fan-in before printing len() of a relation as a count.",
     ),
-    SharedMemory(
+    GlobalMemory(
         "rule.single_element_pick", "incident",
         "Exactly one deployment in a corpus carried two records, and next(iter(a_set)) picked by "
         "hash order. The bug stayed invisible because both candidates happened to be equivalent - "
         "masked, not absent - and the choice moves with PYTHONHASHSEED between runs. This is the "
         "evidence behind the CLAUDE.md rule to establish multiplicity before taking one element.",
     ),
-    SharedMemory(
+    GlobalMemory(
         "rule.generated_artifact_unit", "incident",
         "Reverting one generated view from version control after its source had been rewritten left "
         "the view describing a structure the source no longer had. The result looked plausible and "
         "only a dedicated cross-check caught it. This is the evidence behind the CLAUDE.md rule to "
         "regenerate a generated set whole rather than restoring a member.",
     ),
-    SharedMemory(
+    GlobalMemory(
         "rule.generated_churn", "incident",
         "Version-controlling a generated artifact with unstable labels meant a no-op rebuild rewrote "
         "833 of 1,217 files, all of it renumbering, hiding real defects inside pure churn. This is "
@@ -86,8 +86,8 @@ RULE_INCIDENTS: tuple[SharedMemory, ...] = (
     ),
 )
 
-RETRIEVAL_FINDINGS: tuple[SharedMemory, ...] = (
-    SharedMemory(
+RETRIEVAL_FINDINGS: tuple[GlobalMemory, ...] = (
+    GlobalMemory(
         "retrieval.pgvector_filter_order", "discovery",
         "mem0's pgvector search issues 'SELECT ... WHERE <filters> ORDER BY vector <=> q LIMIT k', "
         "so the scope filter is applied BEFORE ranking and top_k applies to the already-filtered "
@@ -96,7 +96,7 @@ RETRIEVAL_FINDINGS: tuple[SharedMemory, ...] = (
         "against each other and is not crowded out by repository memories.",
         importance=0.7,
     ),
-    SharedMemory(
+    GlobalMemory(
         "retrieval.hnsw_post_filter_risk", "lesson",
         "The memories table carries an HNSW index (memories_hnsw_idx, vector_cosine_ops). At small "
         "row counts Postgres ignores it and seq-scans, so scope filtering is exact. Forcing the "
@@ -109,7 +109,7 @@ RETRIEVAL_FINDINGS: tuple[SharedMemory, ...] = (
         "or add a partial/composite index on payload->>'scope'.",
         importance=0.9,
     ),
-    SharedMemory(
+    GlobalMemory(
         "retrieval.fastapi_ignores_unknown_params", "lesson",
         "FastAPI silently ignores query parameters that are not in the endpoint signature, so an "
         "unsupported filter looks like it works and does nothing. Verified against the self-hosted "
@@ -118,7 +118,7 @@ RETRIEVAL_FINDINGS: tuple[SharedMemory, ...] = (
         "client-side.",
         importance=0.8,
     ),
-    SharedMemory(
+    GlobalMemory(
         "retrieval.similarity_always_returns", "lesson",
         "Vector similarity search always returns nearest neighbours, so a query matching nothing "
         "still comes back with rows. Measured on the self-hosted Mem0 stack: a nonsense query "
@@ -129,15 +129,15 @@ RETRIEVAL_FINDINGS: tuple[SharedMemory, ...] = (
     ),
 )
 
-SHARED_MEMORIES: tuple[SharedMemory, ...] = RULE_INCIDENTS + RETRIEVAL_FINDINGS
+GLOBAL_MEMORIES: tuple[GlobalMemory, ...] = RULE_INCIDENTS + RETRIEVAL_FINDINGS
 
 
-def seed_shared(provider: MemoryProvider, source: str = "global_seed") -> dict[str, str]:
-    """Ensure exactly one shared memory per topic. Returns topic -> memory id."""
-    page = provider.get_all(scope=Scope.GLOBAL, scope_key=SHARED_SCOPE_KEY, top_k=1000)
+def seed_global(provider: MemoryProvider, source: str = "global_seed") -> dict[str, str]:
+    """Ensure exactly one global memory per topic. Returns topic -> memory id."""
+    page = provider.get_all(scope=Scope.GLOBAL, scope_key=GLOBAL_SCOPE_KEY, top_k=1000)
     if page.truncated:
         raise RuntimeError(
-            f"the shared scope holds at least {page.returned} memories, which is the page limit - "
+            f"the global scope holds at least {page.returned} memories, which is the page limit - "
             "raise top_k before seeding so duplicate topics can be found and removed."
         )
 
@@ -147,13 +147,13 @@ def seed_shared(provider: MemoryProvider, source: str = "global_seed") -> dict[s
             by_topic.setdefault(record.envelope.topic, []).append(record.id)
 
     written: dict[str, str] = {}
-    for memory in SHARED_MEMORIES:
+    for memory in GLOBAL_MEMORIES:
         for stale_id in by_topic.get(memory.topic, []):
             provider.delete(stale_id)
         records = provider.add(
             memory.text,
             scope=Scope.GLOBAL,
-            scope_key=SHARED_SCOPE_KEY,
+            scope_key=GLOBAL_SCOPE_KEY,
             kind=memory.kind,
             topic=memory.topic,
             confidence=1.0,

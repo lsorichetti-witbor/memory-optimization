@@ -8,9 +8,9 @@ The skill triggers on intent, not on a command name. You rarely need `/context-m
 
 Two rules shape every example below:
 
-- **Reads are automatic and cover two scopes**: this repository *and* the shared
+- **Reads are automatic and cover two scopes**: this repository *and* the `global`
   scope. You never choose.
-- **Writes are never guessed.** Claude must ask you `repo` or `shared` before
+- **Writes are never guessed.** Claude must ask you `repo` or `global` before
   storing. If it stores without asking, that is a bug — say so.
 
 ---
@@ -56,8 +56,8 @@ Claude should come back with something like:
 
 > Is that true of *this repository*, or true *everywhere*?
 
-Answer `repo` or `shared`. Getting it wrong is quiet: a repository fact stored as
-shared will surface on unrelated projects as if it were universal.
+Answer `repo` or `global`. Getting it wrong is quiet: a repository fact stored as
+`global` will surface on unrelated projects as if it were universal.
 
 ### Repository-scoped — most things
 
@@ -67,15 +67,15 @@ shared will surface on unrelated projects as if it were universal.
 
 > Note for this repo only — the integration tests need the VPN.
 
-### Shared — engineering lessons that travel
+### Global — engineering lessons that travel
 
 > Remember this everywhere: piping a build into a pager replaces the exit code with the pager's, so a failed build reports success.
 
-> Shared scope: antivirus HTTPS scanning re-signs certificates, so package managers fail with CERTIFICATE_VERIFY_FAILED until the root is trusted.
+> Global scope: antivirus HTTPS scanning re-signs certificates, so package managers fail with CERTIFICATE_VERIFY_FAILED until the root is trusted.
 
 > This one's general, not project-specific — FastAPI ignores query params that aren't in the endpoint signature.
 
-**The test:** *would this still be true in a different codebase?* Yes → shared.
+**The test:** *would this still be true in a different codebase?* Yes → `global`.
 No → repo.
 
 ### Give it a topic when it could later be contradicted
@@ -102,7 +102,7 @@ WARNING: the Mem0 server is unreachable. The memory was NOT stored.
     python -m src.scripts.memory_flush
 ```
 
-One spool serves every repository, the shared scope and every user on the
+One spool serves every repository, the global scope and every user on the
 machine — a per-repo queue would strand a memory in whichever checkout you
 happened to be in.
 
@@ -157,9 +157,9 @@ From `repo-alpha`:
 
 > What do we know about this repo?
 
-Returns repo-alpha's memories plus the shared ones. Never repo-beta's.
+Returns repo-alpha's memories plus the global ones. Never repo-beta's.
 
-From `repo-beta`, the same prompt returns repo-beta's plus the same shared ones.
+From `repo-beta`, the same prompt returns repo-beta's plus the same global ones.
 
 > Is this something we learned here, or is it general?
 
@@ -208,7 +208,7 @@ If Claude does any of these, it is a bug:
 
 | Should not | Why |
 |---|---|
-| Store without asking repo vs shared | The wrong scope fails silently, forever |
+| Store to `global` without being asked | The wrong scope fails silently, forever |
 | Store every observation | Memories enter as `candidate` for a reason |
 | Copy `CLAUDE.md` rules into memory | Policy stays in `CLAUDE.md`; memory is what was *learned* |
 | Report a count without its denominator | `24 injected` hides the 63 dropped |

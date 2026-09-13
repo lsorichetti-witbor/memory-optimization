@@ -1,10 +1,10 @@
-﻿# Offline-spool end-to-end test: multiple users x multiple repositories x shared.
+﻿# Offline-spool end-to-end test: multiple users x multiple repositories x global.
 #
 # Run from anywhere:  .\scripts	est-offline-spool.ps1
 # Requires the stack running and server/.env present.
 #
 # Isolation: it uses its own CONTEXT_MEMORY_SPOOL and cleans up BY TOPIC, never
-# by scope. An earlier version cleaned by scope and destroyed the real shared
+# by scope. An earlier version cleaned by scope and destroyed the real global
 # memories, which is the whole reason the cleanup is written the way it is.
 param(
     # Leave the fixtures in the store instead of cleaning up. Use it when you
@@ -36,9 +36,9 @@ $env:MEM0_API_URL = "http://localhost:59999"
 $cases = @(
   @{ user='lautaro';  scope='repository'; key='repo-alpha'; kind='discovery'; topic='alpha.build';  text='Repo alpha pins its build to node 20 because node 22 breaks the native addon.' }
   @{ user='lautaro';  scope='repository'; key='repo-beta';  kind='decision';  topic='beta.storage'; text='Repo beta stores uploads on S3 rather than the database after the 2GB row incident.' }
-  @{ user='lautaro';  scope='global';     key='global';     kind='lesson';    topic='shared.exitcodes'; text='Piping a build into a pager replaces the exit code with the pager exit code, so a failed build reports success.' }
+  @{ user='lautaro';  scope='global';     key='global';     kind='lesson';    topic='global.exitcodes'; text='Piping a build into a pager replaces the exit code with the pager exit code, so a failed build reports success.' }
   @{ user='teammate'; scope='repository'; key='repo-alpha'; kind='convention';topic='alpha.reviews'; text='Repo alpha requires two approvals on anything touching the payments module.' }
-  @{ user='teammate'; scope='global';     key='global';     kind='discovery'; topic='shared.tls';   text='Antivirus HTTPS scanning re-signs certificates, so package managers fail with CERTIFICATE_VERIFY_FAILED until the root is trusted.' }
+  @{ user='teammate'; scope='global';     key='global';     kind='discovery'; topic='global.tls';   text='Antivirus HTTPS scanning re-signs certificates, so package managers fail with CERTIFICATE_VERIFY_FAILED until the root is trusted.' }
 )
 
 foreach ($c in $cases) {
@@ -58,7 +58,7 @@ $users = ($payloads.user | Sort-Object -Unique) -join ','
 Record 'server down' 'users kept apart' 'lautaro,teammate' $users ($users -eq 'lautaro,teammate')
 $scopes = ($payloads | ForEach-Object { "$($_.scope):$($_.scope_key)" } | Sort-Object -Unique) -join ' '
 $expectScopes = 'global:global repository:repo-alpha repository:repo-beta'
-Record 'server down' 'all repos + shared in one spool' $expectScopes $scopes ($scopes -eq $expectScopes)
+Record 'server down' 'all repos + global in one spool' $expectScopes $scopes ($scopes -eq $expectScopes)
 $withStamp = ($payloads | Where-Object { $_.created_at }).Count
 Record 'server down' 'every entry timestamped' "$($cases.Count)" "$withStamp" ($withStamp -eq $cases.Count)
 
@@ -94,7 +94,7 @@ $p = Probe 'lautaro' 'repository' 'repo-alpha' 'uploads storage S3'
 Record 'readback' 'repo-beta memory NOT in repo-alpha' 'no "2GB row incident"' $(if ($p -match '2GB row incident') {'LEAKED'} else {'isolated'}) (-not ($p -match '2GB row incident'))
 
 $p = Probe 'lautaro' 'global' 'global' 'exit code pager build'
-Record 'readback' 'lautaro sees shared scope' 'contains "pager"' $(if ($p -match 'pager') {'found'} else {'MISSING'}) ($p -match 'pager')
+Record 'readback' 'lautaro sees global scope' 'contains "pager"' $(if ($p -match 'pager') {'found'} else {'MISSING'}) ($p -match 'pager')
 
 $p = Probe 'teammate' 'repository' 'repo-alpha' 'approvals payments module'
 Record 'readback' 'teammate sees own repo-alpha memory' 'contains "two approvals"' $(if ($p -match 'two approvals') {'found'} else {'MISSING'}) ($p -match 'two approvals')
@@ -103,7 +103,7 @@ $p = Probe 'teammate' 'repository' 'repo-alpha' 'node 20 native addon'
 Record 'readback' "teammate does NOT see lautaro's memory" 'no "native addon"' $(if ($p -match 'native addon') {'LEAKED'} else {'isolated'}) (-not ($p -match 'native addon'))
 
 $p = Probe 'teammate' 'global' 'global' 'certificate scanning antivirus'
-Record 'readback' 'teammate sees own shared memory' 'contains "CERTIFICATE_VERIFY_FAILED"' $(if ($p -match 'CERTIFICATE_VERIFY_FAILED') {'found'} else {'MISSING'}) ($p -match 'CERTIFICATE_VERIFY_FAILED')
+Record 'readback' 'teammate sees own global memory' 'contains "CERTIFICATE_VERIFY_FAILED"' $(if ($p -match 'CERTIFICATE_VERIFY_FAILED') {'found'} else {'MISSING'}) ($p -match 'CERTIFICATE_VERIFY_FAILED')
 
 # ---- Phase 4: partial failure must keep the file ----
 $env:MEM0_USER = 'lautaro'
@@ -128,14 +128,14 @@ if ($Keep) {
     "-Keep set: the fixtures were left in place for inspection."
     "  users:        lautaro, teammate"
     "  repositories: repo-alpha, repo-beta, repo-gamma"
-    "  shared scope: global"
+    "  global scope: global"
     "  Re-run without -Keep to remove them."
 } else {
-# By topic, not by scope. The shared scope holds real memories, and deleting the
+# By topic, not by scope. The global scope holds real memories, and deleting the
 # whole scope to tidy up a test would destroy them - which is exactly what an
 # earlier version of this script did.
 & $py -c "import os,sys; sys.path.insert(0,'.'); from src.memory.mem0_provider import Mem0Provider; from src.memory.scopes import Scope
-TOPICS={'alpha.build','beta.storage','shared.exitcodes','alpha.reviews','shared.tls'}
+TOPICS={'alpha.build','beta.storage','global.exitcodes','alpha.reviews','global.tls'}
 removed=0
 for u in ('lautaro','teammate'):
     os.environ['MEM0_USER']=u

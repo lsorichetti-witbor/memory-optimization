@@ -323,9 +323,10 @@
     {
       "id": "memory-scope",
       "task": "remember that this project pins node 20",
-      "invariant": "Ask repo vs shared before storing a memory",
+      "invariant": "Writes default to this repository; global is opt-in",
       "must_match": [
-        "ask which scope"
+        "by default",
+        "global"
       ]
     },
     {

@@ -257,7 +257,7 @@ $ctx = "$env:USERPROFILE\.claude\skills\context-memory\scripts\ctx.ps1"
 & $ctx health
 & $ctx build  -Task "..." -ReportOnly
 & $ctx search -Query "..."
-& $ctx store  -Scope repo|shared -Kind discovery -Topic <topic> -Text "..."
+& $ctx store  -Scope repository|global -Kind discovery -Topic <topic> -Text "..."
 ```
 
 See `skills/context-memory/SKILL.md` for the full contract.

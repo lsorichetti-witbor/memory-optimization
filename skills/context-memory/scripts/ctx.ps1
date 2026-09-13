@@ -10,13 +10,14 @@ server/.env, and works from whatever directory you happen to be in.
 
 Scope handling, which is the part that matters:
 
-  READ   always this repository plus the shared `global` scope. Both, every
+  READ   always this repository plus the `global` scope. Both, every
          time - a lesson worth remembering everywhere is useless if it only
          surfaces in the repo where it was learned.
 
-  WRITE  never guessed. `store` requires -Scope repo|shared explicitly,
-         because a repository-specific fact written to the shared scope
-         surfaces on unrelated work as if it were universal truth, and nothing
+  WRITE  this repository by default. -Scope global is opt-in, because the two
+         mistakes are not symmetric: a general lesson stuck in one repo is
+         merely missed elsewhere, while a repo-specific fact written to the
+         global scope surfaces on unrelated work as universal truth and nothing
          about the write looks wrong at the time.
 
 The repository scope key is derived from the git remote, falling back to the
@@ -25,7 +26,8 @@ directory name, so the same project keeps one key across clones.
 .EXAMPLE
 ctx.ps1 build -Task "why does the pgvector column width matter"
 ctx.ps1 search -Query "embedding provider"
-ctx.ps1 store -Scope repo -Kind discovery -Topic server.ports -Text "..."
+ctx.ps1 store -Kind discovery -Topic server.ports -Text "..."      # this repo
+ctx.ps1 store -Scope global -Kind lesson -Text "..."               # everywhere
 ctx.ps1 health
 #>
 [CmdletBinding()]
@@ -40,8 +42,12 @@ param(
     [string]$Topic,
     [string[]]$Files = @(),
 
-    [ValidateSet('repo', 'shared')]
-    [string]$Scope,
+    # Defaults to this repository. `global` has to be asked for, because the two
+    # mistakes are not symmetric: a general lesson stuck in one repo is merely
+    # missed elsewhere, while a repo-specific fact written to `global` surfaces
+    # on unrelated projects as universal truth.
+    [ValidateSet('repository', 'global')]
+    [string]$Scope = 'repository',
 
     [ValidateSet('decision', 'discovery', 'lesson', 'convention', 'failure', 'incident', 'note')]
     [string]$Kind = 'note',
@@ -157,7 +163,7 @@ try {
             Write-Host "Context Manager: $Home_"
             Write-Host "API:             $api  ($($env:MEM0_API_URL))"
             Write-Host "repository scope: $RepoKey"
-            Write-Host "shared scope:     global"
+            Write-Host "global scope:     global"
             Write-Host "user:             $($env:MEM0_USER)"
 
             # Queued writes are invisible until something says so. A memory
@@ -190,7 +196,7 @@ try {
         }
         'search' {
             if (-not $Query) { Write-Error "search needs -Query '<what you are looking for>'" }
-            # Read is always repo + shared. Two calls rather than one, so each
+            # Read is always repository + global. Two calls rather than one, so each
             # result set is labelled and a hit cannot be mistaken for the other scope.
             $common = @('-m', 'src.scripts.memory_search', '--query', $Query, '--top-k', $TopK)
             if ($Threshold -ge 0) { $common += @('--threshold', $Threshold) }
@@ -198,9 +204,9 @@ try {
             Write-Host "--- repository: $RepoKey ---"
             $repoOut = & $Python @common --scope repository --key $RepoKey
             $repoOut | Out-Host
-            Write-Host "--- shared: global ---"
-            $sharedOut = & $Python @common --scope global --key global
-            $sharedOut | Out-Host
+            Write-Host "--- global ---"
+            $globalOut = & $Python @common --scope global --key global
+            $globalOut | Out-Host
 
             # Nothing anywhere is ambiguous: an empty store and a wrong identity
             # or scope key produce the identical output. Say which it could be
@@ -211,7 +217,7 @@ try {
             # reader to ignore the warning, which is the one outcome worth
             # avoiding for a message about a silent failure.
             $total = 0
-            foreach ($line in @($repoOut) + @($sharedOut)) {
+            foreach ($line in @($repoOut) + @($globalOut)) {
                 if ("$line" -match '^\s*(\d+) of top_k') { $total += [int]$Matches[1] }
             }
             $found = $total -gt 0
@@ -224,12 +230,14 @@ try {
             }
         }
         'store' {
-            if (-not $Scope) {
-                Write-Error "store needs -Scope repo|shared. This is deliberately not guessed: a repository fact written to the shared scope surfaces on unrelated work as universal truth, and nothing about the write looks wrong at the time."
-            }
             if (-not $Text) { Write-Error "store needs -Text '<the memory>'" }
-            $scopeName = if ($Scope -eq 'repo') { 'repository' } else { 'global' }
-            $scopeKey = if ($Scope -eq 'repo') { $RepoKey } else { 'global' }
+            $scopeName = if ($Scope -eq 'repository') { 'repository' } else { 'global' }
+            $scopeKey = if ($Scope -eq 'repository') { $RepoKey } else { 'global' }
+            if ($Scope -eq 'global') {
+                # The opt-in direction is the one worth announcing: this memory
+                # will surface on every repository, not just this one.
+                Write-Host "GLOBAL scope: this memory will surface on every repository." -ForegroundColor Yellow
+            }
             $a = @('-m', 'src.scripts.memory_store', '--scope', $scopeName, '--key', $scopeKey,
                    '--kind', $Kind, '--text', $Text, '--confidence', $Confidence, '--importance', $Importance)
             if ($Topic) { $a += @('--topic', $Topic) }
