@@ -326,7 +326,7 @@
       "invariant": "Writes default to this repository; global is opt-in",
       "must_match": [
         "by default",
-        "global"
+        "-Scope global"
       ]
     },
     {

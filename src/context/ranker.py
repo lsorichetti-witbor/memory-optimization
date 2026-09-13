@@ -13,9 +13,14 @@ from dataclasses import dataclass, replace
 
 from src.context.lexical import Bm25
 from src.context.types import ContextItem, Layer, ScoreBreakdown, Task
+from src.memory.scopes import Scope
 
 _POSITIVE = ("relevance", "task_scope_match", "project_scope_match", "confidence", "recency", "importance")
 _NEGATIVE = ("redundancy", "staleness")
+
+# Derived from the Scope enum so a rename cannot leave these behind.
+_TASK_SCOPES = frozenset({Scope.TASK.value, Scope.SESSION.value, Scope.BRANCH.value})
+_PROJECT_SCOPES = frozenset({Scope.REPOSITORY.value, Scope.PROJECT.value})
 
 
 @dataclass(frozen=True)
@@ -53,14 +58,19 @@ class ContextRanker:
         scope = item.metadata.get("scope")
         key = item.metadata.get("scope_key")
 
+        # Compared against the Scope enum, never against string literals. These
+        # were literals, and renaming the repository scope value from
+        # "repository" to "repo" silently killed project_scope_match: the branch
+        # simply stopped matching, every memory scored 0, and the ranker went on
+        # working well enough that no test noticed.
         task_match = 0.0
         if task.files and item.source in task.files:
             task_match = 1.0
-        elif scope in {"task", "session", "branch"} and key:
+        elif scope in _TASK_SCOPES and key:
             task_match = 1.0 if key in (task.branch, task.description) else 0.0
 
         project_match = 0.0
-        if scope in {"repository", "project"} and key and task.repository:
+        if scope in _PROJECT_SCOPES and key and task.repository:
             project_match = 1.0 if key == task.repository else 0.0
 
         return task_match, project_match

@@ -196,13 +196,13 @@ try {
         }
         'search' {
             if (-not $Query) { Write-Error "search needs -Query '<what you are looking for>'" }
-            # Read is always repository + global. Two calls rather than one, so each
+            # Read is always repo + global. Two calls rather than one, so each
             # result set is labelled and a hit cannot be mistaken for the other scope.
             $common = @('-m', 'src.scripts.memory_search', '--query', $Query, '--top-k', $TopK)
             if ($Threshold -ge 0) { $common += @('--threshold', $Threshold) }
             if ($Json) { $common += '--json' }
-            Write-Host "--- repository: $RepoKey ---"
-            $repoOut = & $Python @common --scope repository --key $RepoKey
+            Write-Host "--- repo: $RepoKey ---"
+            $repoOut = & $Python @common --scope repo --key $RepoKey
             $repoOut | Out-Host
             Write-Host "--- global ---"
             $globalOut = & $Python @common --scope global --key global
@@ -231,9 +231,13 @@ try {
         }
         'store' {
             if (-not $Text) { Write-Error "store needs -Text '<the memory>'" }
-            # `repo` on the command line, `repository` in the data. The short
-            # form is what you type; the scope vocabulary is what gets stored.
-            $scopeName = if ($Scope -eq 'repo') { 'repository' } else { 'global' }
+            # One word for one thing: `repo` is what you type, what the CLI
+            # accepts, what lands in metadata["scope"], and what prefixes the
+            # agent_id. It used to be translated to `repository` here, and when
+            # the vocabulary dropped that alias the translation kept passing a
+            # word argparse no longer accepted - store failed on every repo
+            # write while the launcher itself looked untouched.
+            $scopeName = $Scope
             $scopeKey = if ($Scope -eq 'repo') { $RepoKey } else { 'global' }
             if ($Scope -eq 'global') {
                 # The opt-in direction is the one worth announcing: this memory

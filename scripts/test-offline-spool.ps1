@@ -34,16 +34,16 @@ $env:MEM0_API_KEY = (Select-String -Path "server\.env" -Pattern '^ADMIN_API_KEY=
 $env:MEM0_API_URL = "http://localhost:59999"
 
 $cases = @(
-  @{ user='lautaro';  scope='repository'; key='repo-alpha'; kind='discovery'; topic='alpha.build';  text='Repo alpha pins its build to node 20 because node 22 breaks the native addon.' }
-  @{ user='lautaro';  scope='repository'; key='repo-beta';  kind='decision';  topic='beta.storage'; text='Repo beta stores uploads on S3 rather than the database after the 2GB row incident.' }
+  @{ user='lautaro';  scope='repo'; key='repo-alpha'; kind='discovery'; topic='alpha.build';  text='Repo alpha pins its build to node 20 because node 22 breaks the native addon.' }
+  @{ user='lautaro';  scope='repo'; key='repo-beta';  kind='decision';  topic='beta.storage'; text='Repo beta stores uploads on S3 rather than the database after the 2GB row incident.' }
   @{ user='lautaro';  scope='global';     key='global';     kind='lesson';    topic='global.exitcodes'; text='Piping a build into a pager replaces the exit code with the pager exit code, so a failed build reports success.' }
-  @{ user='teammate'; scope='repository'; key='repo-alpha'; kind='convention';topic='alpha.reviews'; text='Repo alpha requires two approvals on anything touching the payments module.' }
+  @{ user='teammate'; scope='repo'; key='repo-alpha'; kind='convention';topic='alpha.reviews'; text='Repo alpha requires two approvals on anything touching the payments module.' }
   @{ user='teammate'; scope='global';     key='global';     kind='discovery'; topic='global.tls';   text='Antivirus HTTPS scanning re-signs certificates, so package managers fail with CERTIFICATE_VERIFY_FAILED until the root is trusted.' }
 )
 
 foreach ($c in $cases) {
     $env:MEM0_USER = $c.user
-    $env:MEM0_REPOSITORY = if ($c.scope -eq 'repository') { $c.key } else { $null }
+    $env:MEM0_REPOSITORY = if ($c.scope -eq 'repo') { $c.key } else { $null }
     & $py -m src.scripts.memory_store --scope $c.scope --key $c.key --kind $c.kind --topic $c.topic --text $c.text 2>&1 | Out-Null
     $rc = $LASTEXITCODE
     Record 'server down' "$($c.user) -> $($c.scope):$($c.key)" 'exit 3 (queued, not lost)' "exit $rc" ($rc -eq 3)
@@ -57,7 +57,7 @@ $payloads = Get-ChildItem "$spool\*.json" | ForEach-Object { Get-Content $_ -Raw
 $users = ($payloads.user | Sort-Object -Unique) -join ','
 Record 'server down' 'users kept apart' 'lautaro,teammate' $users ($users -eq 'lautaro,teammate')
 $scopes = ($payloads | ForEach-Object { "$($_.scope):$($_.scope_key)" } | Sort-Object -Unique) -join ' '
-$expectScopes = 'global:global repository:repo-alpha repository:repo-beta'
+$expectScopes = 'global:global repo:repo-alpha repo:repo-beta'
 Record 'server down' 'all repos + global in one spool' $expectScopes $scopes ($scopes -eq $expectScopes)
 $withStamp = ($payloads | Where-Object { $_.created_at }).Count
 Record 'server down' 'every entry timestamped' "$($cases.Count)" "$withStamp" ($withStamp -eq $cases.Count)
@@ -84,22 +84,22 @@ function Probe($user, $scope, $key, $needle) {
     return $out
 }
 
-$p = Probe 'lautaro' 'repository' 'repo-alpha' 'node 20 native addon'
+$p = Probe 'lautaro' 'repo' 'repo-alpha' 'node 20 native addon'
 Record 'readback' 'lautaro sees repo-alpha' 'contains "node 20"' $(if ($p -match 'node 20') {'found'} else {'MISSING'}) ($p -match 'node 20')
 
-$p = Probe 'lautaro' 'repository' 'repo-beta' 'uploads storage S3'
+$p = Probe 'lautaro' 'repo' 'repo-beta' 'uploads storage S3'
 Record 'readback' 'lautaro sees repo-beta' 'contains "S3"' $(if ($p -match 'S3') {'found'} else {'MISSING'}) ($p -match 'S3')
 
-$p = Probe 'lautaro' 'repository' 'repo-alpha' 'uploads storage S3'
+$p = Probe 'lautaro' 'repo' 'repo-alpha' 'uploads storage S3'
 Record 'readback' 'repo-beta memory NOT in repo-alpha' 'no "2GB row incident"' $(if ($p -match '2GB row incident') {'LEAKED'} else {'isolated'}) (-not ($p -match '2GB row incident'))
 
 $p = Probe 'lautaro' 'global' 'global' 'exit code pager build'
 Record 'readback' 'lautaro sees global scope' 'contains "pager"' $(if ($p -match 'pager') {'found'} else {'MISSING'}) ($p -match 'pager')
 
-$p = Probe 'teammate' 'repository' 'repo-alpha' 'approvals payments module'
+$p = Probe 'teammate' 'repo' 'repo-alpha' 'approvals payments module'
 Record 'readback' 'teammate sees own repo-alpha memory' 'contains "two approvals"' $(if ($p -match 'two approvals') {'found'} else {'MISSING'}) ($p -match 'two approvals')
 
-$p = Probe 'teammate' 'repository' 'repo-alpha' 'node 20 native addon'
+$p = Probe 'teammate' 'repo' 'repo-alpha' 'node 20 native addon'
 Record 'readback' "teammate does NOT see lautaro's memory" 'no "native addon"' $(if ($p -match 'native addon') {'LEAKED'} else {'isolated'}) (-not ($p -match 'native addon'))
 
 $p = Probe 'teammate' 'global' 'global' 'certificate scanning antivirus'
@@ -108,7 +108,7 @@ Record 'readback' 'teammate sees own global memory' 'contains "CERTIFICATE_VERIF
 # ---- Phase 4: partial failure must keep the file ----
 $env:MEM0_USER = 'lautaro'
 $env:MEM0_API_URL = "http://localhost:59999"
-& $py -m src.scripts.memory_store --scope repository --key repo-gamma --kind note --text "A memory queued for a failure test, long enough to be stored." 2>&1 | Out-Null
+& $py -m src.scripts.memory_store --scope repo --key repo-gamma --kind note --text "A memory queued for a failure test, long enough to be stored." 2>&1 | Out-Null
 $env:MEM0_API_URL = "http://localhost:59998"   # still down on flush
 $out = & $py -m src.scripts.memory_flush 2>&1 | Out-String
 $rc = $LASTEXITCODE

@@ -67,7 +67,10 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             finally:
                 seeding_provider.close()
-            print(f"seeded {len(written)} memories into repository:{scope_key}", file=sys.stderr)
+            # Print the identifier the memories actually carry. `repository:<key>`
+            # named nothing: the agent_id is `repo:<key>`, so anyone grepping the
+            # dashboard for what this line printed found zero rows.
+            print(f"seeded {len(written)} memories into {Scope.REPOSITORY.value}:{scope_key}", file=sys.stderr)
 
         def memory_factory():  # noqa: F811 - deliberate closure over env
             return MemoryContextSource(
@@ -80,13 +83,23 @@ def main(argv: list[str] | None = None) -> int:
                 top_k=args.top_k,
             )
 
-    report = run_all(
-        dataset=dataset,
-        root=root,
-        top_k=args.top_k,
-        budget=args.budget,
-        memory_source_factory=memory_factory,
-    )
+    from src.evaluation.runner import SourceUnavailable
+
+    try:
+        report = run_all(
+            dataset=dataset,
+            root=root,
+            top_k=args.top_k,
+            budget=args.budget,
+            memory_source_factory=memory_factory,
+        )
+    except SourceUnavailable as error:
+        # Refusing to print a table beats printing one whose numbers describe an
+        # outage. Exit 2 so a caller can tell "could not measure" from "measured
+        # and the result was bad".
+        print(f"error: {error}", file=sys.stderr)
+        print("No results written: an outage is not a measurement.", file=sys.stderr)
+        return 2
     if memory_factory is None:
         report.notes = report.notes + (
             "No Mem0 server was reachable (MEM0_API_URL unset or --no-memory). "

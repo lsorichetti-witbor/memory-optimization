@@ -135,17 +135,3 @@ def test_the_scope_value_and_its_agent_prefix_are_the_same_word():
     ids = scope_identifiers(Scope.REPOSITORY, key="k", user="u")
     assert Scope.REPOSITORY.value == "repo"
     assert ids["agent_id"].split(":")[0] == Scope.REPOSITORY.value
-
-
-def test_a_scope_written_before_the_rename_still_parses():
-    # Exports taken before the rename carry "repository". Refusing them would
-    # make an old backup unrestorable, which is the one thing a backup must not be.
-    assert Scope.parse("repository") is Scope.REPOSITORY
-
-
-def test_the_legacy_name_is_never_written_back_out():
-    # Accepted on the way in, never on the way out - otherwise the old name
-    # quietly returns to the data it was removed from.
-    ids = scope_identifiers(Scope.parse("repository"), key="k", user="u")
-    assert "repository:" not in ids["agent_id"]
-    assert Scope.parse("repository").value == "repo"

@@ -36,6 +36,10 @@ from src.evaluation.report import ArmResult, RunReport
 FULL_ARM_BUDGET = 1_000_000
 
 
+class SourceUnavailable(RuntimeError):
+    """A context source failed, so the arm has no score rather than a score of zero."""
+
+
 @dataclass(frozen=True)
 class Arm:
     name: str
@@ -108,7 +112,8 @@ def run_case(
 
     tokens = result.report.budget_report.total_tokens if result.report.budget_report else 0
     memories = sum(1 for i in result.items if i.layer is Layer.MEMORY)
-    return retrieved, tokens, memories, elapsed, result.report.candidates, result.report.duplicate_rate
+    return (retrieved, tokens, memories, elapsed, result.report.candidates,
+            result.report.duplicate_rate, result.report.source_errors)
 
 
 def run_arm(
@@ -123,6 +128,7 @@ def run_arm(
     precisions: list[Optional[float]] = []
     rrs: list[float] = []
     ndcgs: list[float] = []
+    source_errors: dict[str, str] = {}
     tokens_total = 0
     memories_total = 0
     latency_total = 0.0
@@ -138,7 +144,10 @@ def run_arm(
         sources = [s for layer, s in available.items() if layer in arm.layers]
         manager = ContextManager(sources=sources, max_tokens=arm_budget, floors=LayerFloors())
 
-        retrieved, tokens, memories, elapsed, candidates, dup = run_case(manager, case, top_k, arm_budget)
+        retrieved, tokens, memories, elapsed, candidates, dup, errors = run_case(
+            manager, case, top_k, arm_budget
+        )
+        source_errors.update(errors)
 
         relevant = set(case.relevant)
         recalls.append(recall_at_k(retrieved, relevant, top_k))
@@ -154,6 +163,16 @@ def run_arm(
     n = max(1, dataset.size)
     recall_mean, scoreable, total = mean_defined(recalls)
     precision_mean, _, _ = mean_defined(precisions)
+
+    if source_errors:
+        # A source that failed produced no items, and scoring that as 0.0 reports
+        # an outage as a measurement. Measured: a Gemini quota exhaustion made
+        # every memory arm read 0.000 recall, which is indistinguishable from a
+        # ranking regression until someone reads the container log.
+        raise SourceUnavailable(
+            f"arm {arm.name!r} could not be scored - "
+            + "; ".join(f"{name}: {err}" for name, err in source_errors.items())
+        )
 
     return ArmResult(
         name=arm.name,

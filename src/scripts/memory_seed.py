@@ -47,12 +47,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.list_only:
         lines = [f"global scope ({len(GLOBAL_MEMORIES)} memories):"]
         lines += [f"  {m.kind:<9} {m.topic}" for m in GLOBAL_MEMORIES]
-        lines.append(f"repository scope ({len(SEED_MEMORIES)} memories):")
+        lines.append(f"{Scope.REPOSITORY.value} scope ({len(SEED_MEMORIES)} memories):")
         lines += [f"  {m.kind:<9} {m.topic}" for m in SEED_MEMORIES]
         emit(
             {
-                "global": [{"topic": m.topic, "kind": m.kind} for m in GLOBAL_MEMORIES],
-                "repository": [{"topic": m.topic, "kind": m.kind} for m in SEED_MEMORIES],
+                Scope.GLOBAL.value: [{"topic": m.topic, "kind": m.kind} for m in GLOBAL_MEMORIES],
+                Scope.REPOSITORY.value: [{"topic": m.topic, "kind": m.kind} for m in SEED_MEMORIES],
             },
             args.json,
             "\n".join(lines),
@@ -67,9 +67,9 @@ def main(argv: list[str] | None = None) -> int:
     written: dict[str, dict[str, str]] = {}
     try:
         if args.global_scope:
-            written["global"] = seed_global(provider)
+            written[Scope.GLOBAL.value] = seed_global(provider)
         if args.repo:
-            written["repository"] = seed_repo(provider, scope_key=args.repo, scope=Scope.REPOSITORY)
+            written[Scope.REPOSITORY.value] = seed_repo(provider, scope_key=args.repo, scope=Scope.REPOSITORY)
     except (RuntimeError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

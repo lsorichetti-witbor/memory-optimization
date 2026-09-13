@@ -2,6 +2,7 @@ import pytest
 
 from src.context.ranker import ContextRanker, ScoringWeights
 from src.context.types import ContextItem, Layer, Signals, Task
+from src.memory.scopes import Scope
 
 
 def item(id_, layer, content, **signals):
@@ -127,3 +128,30 @@ def test_every_item_comes_back_ranked():
     ranked = ContextRanker().rank(items, Task(description="x"))
     assert len(ranked) == 5
     assert all(i.breakdown is not None for i in ranked)
+
+
+def test_project_scope_match_actually_fires_for_a_repository_memory():
+    # The previous test passed by accident: with the signal dead both items
+    # scored 0 and the id tiebreak happened to put the right one first. Assert
+    # the contribution itself, so renaming a scope value cannot silently kill it.
+    on_repo = ContextItem(
+        id="a", layer=Layer.MEMORY, content="x", source="mem0",
+        metadata={"scope": Scope.REPOSITORY.value, "scope_key": "memory-optimization"},
+    )
+    ranked = ContextRanker().rank([on_repo], Task(description="x", repository="memory-optimization"))
+    assert ranked[0].breakdown.contributions["project_scope_match"] == 1.0
+
+
+def test_task_scope_match_actually_fires_for_a_task_memory():
+    on_task = ContextItem(
+        id="a", layer=Layer.MEMORY, content="x", source="mem0",
+        metadata={"scope": Scope.TASK.value, "scope_key": "add-graph-store"},
+    )
+    ranked = ContextRanker().rank([on_task], Task(description="add-graph-store"))
+    assert ranked[0].breakdown.contributions["task_scope_match"] == 1.0
+
+
+def test_the_scope_sets_come_from_the_enum_not_from_literals():
+    from src.context.ranker import _PROJECT_SCOPES, _TASK_SCOPES
+    assert Scope.REPOSITORY.value in _PROJECT_SCOPES
+    assert Scope.TASK.value in _TASK_SCOPES

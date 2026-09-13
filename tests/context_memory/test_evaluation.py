@@ -134,3 +134,41 @@ def test_an_arm_with_no_scoreable_cases_is_reported_as_such_not_as_zero():
     result = ArmResult(name="memory-only", recall_at_k=None, precision_at_k=None, mrr=0.0,
                        ndcg=0.0, context_tokens=0, memories_injected=0, latency_ms=0.0)
     assert "n/a" in result.render_row()
+
+
+def test_an_arm_whose_source_failed_raises_instead_of_scoring_zero(tmp_path):
+    # A source that errored produced no items, and scoring that 0.0 reports an
+    # outage as a measurement. Measured: a Gemini quota exhaustion made every
+    # memory arm read 0.000 recall, indistinguishable from a ranking regression
+    # until someone read the container log.
+    import pytest as _pytest
+
+    from src.context.sources.base import ContextSource
+    from src.context.types import ContextItem, Layer, Task
+    from src.evaluation.dataset import EvalCase, EvalDataset
+    from src.evaluation.runner import Arm, SourceUnavailable, run_arm
+
+    class BrokenSource(ContextSource):
+        def __init__(self):
+            self.last_error = RuntimeError("upstream 502: quota exhausted")
+
+        @property
+        def name(self):
+            return "memory"
+
+        @property
+        def layer(self):
+            return Layer.MEMORY
+
+        def collect(self, task):
+            return []
+
+    (tmp_path / "README.md").write_text("# P\n\nx\n", encoding="utf-8")
+    dataset = EvalDataset(
+        name="t", description="d",
+        cases=(EvalCase(id="c1", question="q", relevant=frozenset({"README.md"})),),
+    )
+    arm = Arm("memory-only", frozenset({Layer.MEMORY}))
+
+    with _pytest.raises(SourceUnavailable, match="quota exhausted"):
+        run_arm(arm, dataset, tmp_path, top_k=5, budget=1000, memory_source_factory=lambda: BrokenSource())
