@@ -217,7 +217,12 @@ def release(db: Session, rows, *, now: Optional[datetime] = None) -> int:
     result = db.execute(
         update(PendingMemory)
         .where(PendingMemory.id.in_(ids), PendingMemory.state == EMBEDDING)
-        .values(state=PENDING, claimed_by=None, lease_until=None, updated_at=moment)
+        # next_attempt_at is reset too: the row was never tried, so it has not
+        # earned a backoff and must not sit out one it never caused.
+        .values(
+            state=PENDING, claimed_by=None, lease_until=None,
+            next_attempt_at=moment, updated_at=moment,
+        )
     )
     db.commit()
     return int(result.rowcount or 0)

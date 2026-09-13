@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { AlertTriangle, Check, Copy, RefreshCw, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { AlertTriangle, Check, Copy, RefreshCw, Send, Trash2 } from "lucide-react";
 import { format } from "date-fns";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -184,6 +184,11 @@ export default function QueuePage() {
   const [toDelete, setToDelete] = useState<PendingItem | null>(null);
   const [detail, setDetail] = useState<PendingItem | null>(null);
   const [retrying, setRetrying] = useState(false);
+  // Auto-refresh runs only while a send is in flight. A dashboard that polls
+  // forever is a dashboard people leave open and stop trusting; the point here
+  // is narrow - after "Send all" the work happens on the server and the page
+  // would otherwise sit unchanged with no sign anything is happening.
+  const [autoRefresh, setAutoRefresh] = useState(false);
 
   const {
     data = EMPTY,
@@ -197,6 +202,10 @@ export default function QueuePage() {
     { errorToast: "Failed to load the embedding queue", initialData: EMPTY },
   );
 
+  // Held in a ref so the polling effect does not re-subscribe every render.
+  const refetchRef = useRef(refetch);
+  refetchRef.current = refetch;
+
   const handleRetry = async (force = false) => {
     setRetrying(true);
     try {
@@ -208,14 +217,15 @@ export default function QueuePage() {
       // so. Reporting a flat "re-armed" beside a parked banner left it unclear
       // whether the provider had been called.
       toast({
-        title: res.data?.attempting ? "Re-armed, worker running" : "Re-armed, queue still parked",
+        title: res.data?.attempting ? "Sending - the worker is running" : "Rows refreshed",
         description: res.data?.note,
         variant: "success",
       });
+      if (res.data?.attempting) setAutoRefresh(true);
       void refetch();
     } catch (error) {
       toast({
-        title: "Failed to re-arm the queue",
+        title: force ? "Failed to send" : "Failed to refresh",
         description: getErrorMessage(error),
         variant: "destructive",
       });
@@ -223,6 +233,22 @@ export default function QueuePage() {
       setRetrying(false);
     }
   };
+
+  const inFlight = data.pending + data.embedding;
+
+  useEffect(() => {
+    if (!autoRefresh) return;
+    // Nothing left that can move on its own. `error` and `dead` rows are
+    // waiting on a backoff or a person, so polling for them would never end -
+    // stopping here is what makes this finite rather than a permanent poll.
+    if (inFlight === 0) {
+      setAutoRefresh(false);
+      return;
+    }
+    const id = setInterval(() => void refetchRef.current(), 5000);
+    // Clears on unmount too, so leaving the page stops the polling.
+    return () => clearInterval(id);
+  }, [autoRefresh, inFlight]);
 
   const handleDelete = async () => {
     if (!toDelete) return;
@@ -336,31 +362,35 @@ export default function QueuePage() {
             until they drain.</strong>
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
+          {autoRefresh && (
+            <span className="text-xs text-onSurface-default-secondary">
+              refreshing every 5s&hellip;
+            </span>
+          )}
           <Button
             onClick={() => handleRetry(false)}
             disabled={retrying}
-            variant={breakerOpen ? "outline" : "default"}
+            variant="outline"
+            className="gap-2"
+            title="Reload the queue and put error and dead rows back to pending. Sends nothing."
+          >
+            <RefreshCw className={`size-4 ${retrying || autoRefresh ? "animate-spin" : ""}`} />
+            Refresh
+          </Button>
+          <Button
+            onClick={() => handleRetry(true)}
+            disabled={retrying || data.total === 0}
             className="gap-2"
             title={
               breakerOpen
-                ? "Re-arms the rows. Nothing is sent to the provider while the queue is parked."
-                : "Re-arm every error and dead row, and run the worker now."
+                ? "Overrides the park and sends everything to the provider now. Only if the cause is fixed."
+                : "Send every queued memory to the provider now."
             }
           >
-            <RefreshCw className={`size-4 ${retrying ? "animate-spin" : ""}`} />
-            {breakerOpen ? "Re-arm rows" : "Retry all now"}
+            <Send className="size-4" />
+            Send all
           </Button>
-          {breakerOpen && (
-            <Button
-              onClick={() => handleRetry(true)}
-              disabled={retrying}
-              className="gap-2"
-              title="Only if the cause is actually fixed - a raised quota, a replaced key."
-            >
-              Probe now
-            </Button>
-          )}
         </div>
       </div>
 
@@ -381,8 +411,8 @@ export default function QueuePage() {
                   : null}
             </div>
             <div className="text-xs text-onSurface-default-secondary">
-              While parked, <strong>Re-arm rows</strong> only resets their state — nothing is sent
-              to the provider. Use <strong>Probe now</strong> once the cause is actually fixed.
+              <strong>Refresh</strong> only resets row state — nothing is sent while parked. Use
+              <strong> Send all</strong> to override the park, once the cause is actually fixed.
             </div>
           </div>
         </Card>

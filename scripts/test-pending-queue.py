@@ -182,6 +182,34 @@ def main() -> int:
         check("and are not charged an attempt they never had", set(attempts) == {0}, f"got {attempts}")
         clean(db)
 
+    # -- "send all" has to mean all -----------------------------------------
+    print("\nsend all")
+    with SessionLocal() as db:
+        clean(db)
+        row = add(db, "already pending but inside a backoff window")
+        db.query(PendingMemory).filter(PendingMemory.id == row.id).update(
+            {"next_attempt_at": pending._utcnow() + timedelta(hours=1)}
+        )
+        db.commit()
+        check("a pending row inside its window is not claimable",
+              not mine(pending.claim_batch(db, limit=5)))
+
+        # What the endpoint does with force=true. A row already in `pending`
+        # keeps whatever next_attempt_at it was given, so pressing the button
+        # looked like it did nothing and the rows stayed put with no reason.
+        from sqlalchemy import update as sa_update
+
+        db.execute(
+            sa_update(PendingMemory)
+            .where(PendingMemory.state == "pending",
+                   PendingMemory.next_attempt_at > pending._utcnow())
+            .values(next_attempt_at=pending._utcnow())
+        )
+        db.commit()
+        check("send-all clears the window so the row can actually go",
+              len(mine(pending.claim_batch(db, limit=5))) == 1)
+        clean(db)
+
     # -- idempotency --------------------------------------------------------
     print("\nidempotency")
     with SessionLocal() as db:

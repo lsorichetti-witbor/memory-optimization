@@ -558,14 +558,25 @@ def retry_pending(force: bool = False, _auth=Depends(require_admin)):
     the cause - raised the quota, replaced the key - and wants a probe now
     rather than at the scheduled time.
     """
+    now = datetime.now(timezone.utc)
     with SessionLocal() as db:
         result = db.execute(
             update(PendingMemory)
             .where(PendingMemory.state.in_([pending.ERROR, pending.DEAD]))
-            .values(state=pending.PENDING, next_attempt_at=datetime.now(timezone.utc), attempts=0)
+            .values(state=pending.PENDING, next_attempt_at=now, attempts=0)
         )
-        db.commit()
         rearmed = int(result.rowcount or 0)
+        if force:
+            # "Send all" has to mean all. A row already sitting in `pending`
+            # keeps whatever next_attempt_at it was given, and one still inside
+            # that window is not claimable - so pressing the button appeared to
+            # do nothing and the rows stayed put with no explanation.
+            db.execute(
+                update(PendingMemory)
+                .where(PendingMemory.state == pending.PENDING, PendingMemory.next_attempt_at > now)
+                .values(next_attempt_at=now)
+            )
+        db.commit()
         summary = pending.stats(db)
 
     parked = pending.breaker.is_open
