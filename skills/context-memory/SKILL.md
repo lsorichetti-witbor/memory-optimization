@@ -31,9 +31,13 @@ largest one that fits.
 
 ## Non-negotiables
 
-1. **Instructions are policy, not memory.** They are pinned and never trimmed by
-   the budget. If policy does not fit, that is an error to surface, not
-   something to silently cut.
+1. **Instructions are policy, not memory.** Instruction files **on the task's own
+   path** are pinned and never trimmed by the budget; if that policy does not
+   fit, the build raises rather than silently cutting a rule. Instruction files
+   found elsewhere in the tree are ranked candidates, not policy — in a polyglot
+   monorepo `cli/node/AGENTS.md` is not policy for a server task, and pinning
+   every one of them put 13,373 tokens of unskippable "policy" against an 8,000
+   token budget.
 2. **Historical memory must never silently override current repository truth.**
    Precedence is instructions → current state → repository → memory. A memory
    that loses is marked stale and still shown, annotated with what overruled it -
@@ -134,7 +138,7 @@ is terminal and always requires a pointer to the replacement.
 ## Environment
 
 ```
-MEM0_API_URL     http://localhost:8888
+MEM0_API_URL     http://localhost:8888   # port comes from MEM0_API_PORT in server/.env
 MEM0_API_KEY     ADMIN_API_KEY from server/.env
 MEM0_USER        who the memory belongs to
 MEM0_REPOSITORY  optional repository scope key

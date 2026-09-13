@@ -3,7 +3,7 @@
 Connection settings come from the environment so a key never lands in shell
 history or a process listing:
 
-    MEM0_API_URL     http://localhost:8888
+    MEM0_API_URL     http://localhost:8888   (port from MEM0_API_PORT in server/.env)
     MEM0_API_KEY     the ADMIN_API_KEY from server/.env
     MEM0_USER        the human this memory belongs to
     MEM0_REPOSITORY  optional, the repository scope key

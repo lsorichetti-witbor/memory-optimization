@@ -6,8 +6,9 @@ Windows-friendly control for the self-hosted Mem0 stack.
 server/Makefile's `up` target shells out to `lsof`, which does not exist on
 Windows, so the Makefile is unusable here. This wraps `docker compose` directly.
 
-Only the `mem0` and `postgres` services are started. The Next.js dashboard is
-optional and is not needed by the Context Manager.
+Starts postgres, the API and the Next.js dashboard. Host ports come from
+server/.env (MEM0_API_PORT, POSTGRES_HOST_PORT, DASHBOARD_PORT) so this script
+and docker-compose.yaml cannot disagree about where the stack is listening.
 
 .EXAMPLE
 ./scripts/stack.ps1 up
@@ -25,8 +26,33 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ServerDir = Join-Path (Split-Path -Parent $PSScriptRoot) 'server'
-$ApiUrl = 'http://localhost:8888'
-$Services = @('postgres', 'mem0')
+$Services = @('postgres', 'mem0', 'mem0-dashboard')
+
+function Get-EnvValue {
+    <#
+      Read a value from server/.env. Ports live there, not here: hardcoding them
+      in this script as well as in docker-compose.yaml is two sources of truth
+      that drift, and the drift shows up as "the stack is down" when it is
+      merely listening somewhere else.
+    #>
+    param([string]$Name, [string]$Default)
+    $envFile = Join-Path $ServerDir '.env'
+    if (Test-Path $envFile) {
+        foreach ($line in Get-Content $envFile) {
+            if ($line -match "^\s*$([regex]::Escape($Name))\s*=\s*(.*?)\s*$") {
+                $value = $Matches[1]
+                if ($value) { return $value }
+            }
+        }
+    }
+    return $Default
+}
+
+$ApiPort = Get-EnvValue -Name 'MEM0_API_PORT' -Default '8888'
+$PgPort = Get-EnvValue -Name 'POSTGRES_HOST_PORT' -Default '8432'
+$DashPort = Get-EnvValue -Name 'DASHBOARD_PORT' -Default '3000'
+$ApiUrl = "http://localhost:$ApiPort"
+$DashboardUrl = "http://localhost:$DashPort"
 
 function Invoke-Compose {
     param([string[]]$ComposeArgs)
@@ -39,6 +65,13 @@ function Test-Port {
     param([int]$Port)
     $listening = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue
     return $null -ne $listening
+}
+
+function Test-Api {
+    try {
+        $r = Invoke-WebRequest -Uri "$ApiUrl/auth/setup-status" -UseBasicParsing -TimeoutSec 3
+        return $r.StatusCode -eq 200
+    } catch { return $false }
 }
 
 function Wait-Api {
@@ -54,15 +87,22 @@ function Wait-Api {
 
 switch ($Command) {
     'up' {
-        foreach ($port in 8888, 8432) {
-            if (Test-Port -Port $port) {
-                Write-Error "port $port is already in use. Find the owner with: Get-NetTCPConnection -State Listen -LocalPort $port"
+        # A port held by OUR already-running stack is not a conflict. Erroring on
+        # it sends the reader hunting a process when nothing is wrong, and
+        # `docker compose up -d` is idempotent anyway. Only a port held by
+        # something that is not this stack is worth stopping for.
+        $oursAlready = Test-Api
+        if (-not $oursAlready) {
+            foreach ($port in $ApiPort, $PgPort) {
+                if (Test-Port -Port $port) {
+                    Write-Error "port $port is in use, and it is not this stack's API. Find the owner with: Get-NetTCPConnection -State Listen -LocalPort $port"
+                }
             }
         }
         $rc = Invoke-Compose @('up', '-d', '--build') + $Services
         if ($rc -ne 0) { Write-Error "docker compose up failed with exit code $rc" }
         if (Wait-Api) {
-            Write-Host "Stack is ready. API: $ApiUrl  (OpenAPI at $ApiUrl/docs)"
+            Write-Host "Stack is ready. API: $ApiUrl  (OpenAPI at $ApiUrl/docs)  Dashboard: $DashboardUrl"
         } else {
             # Never report success on a timeout: an unreachable API that prints
             # "ready" is worse than one that prints nothing.
@@ -84,7 +124,9 @@ switch ($Command) {
     }
     'health' {
         $api = try { (Invoke-WebRequest -Uri "$ApiUrl/docs" -UseBasicParsing -TimeoutSec 5).StatusCode } catch { 'down' }
-        Write-Host "API:      $api"
+        $dash = try { (Invoke-WebRequest -Uri "$DashboardUrl/api/health" -UseBasicParsing -TimeoutSec 5).StatusCode } catch { 'down' }
+        Write-Host "API:       $api  ($ApiUrl)"
+        Write-Host "Dashboard: $dash  ($DashboardUrl)"
         Push-Location $ServerDir
         try {
             & docker compose exec -T postgres pg_isready -q
