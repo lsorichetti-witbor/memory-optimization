@@ -11,6 +11,14 @@ resolves conflicts and budgets them.
 Nothing above this line changes: `AGENTS.md` remains the contract for the
 upstream packages (`mem0/`, `mem0-ts/`, `cli/`, `server/`, `docs/`).
 
+## How it works
+
+**→ [docs/context-memory/ARCHITECTURE.md](docs/context-memory/ARCHITECTURE.md)**
+
+The whole system: scopes and lifecycle, the four-source context pipeline, both
+write queues and why there are two, error classification, what is visible where,
+the evaluation harnesses, and the known limits with their failure directions.
+
 ## Deploying and running it locally
 
 **→ [docs/context-memory/SETUP.md](docs/context-memory/SETUP.md)**
