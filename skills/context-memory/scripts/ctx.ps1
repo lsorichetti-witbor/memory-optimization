@@ -140,6 +140,25 @@ function Get-RepoKey {
     return (Split-Path (Get-Location) -Leaf)
 }
 
+function New-TextFile {
+    <#
+      Hand free text to python through a file, never through argv.
+
+      PowerShell 5.1 re-splits a quoted argument on its way to a native
+      executable and strips the quotes: measured, `a memory containing "quoted
+      text" in the middle` arrives as THREE arguments and argv[1] is `a memory
+      containing quoted`. So any memory or query containing a double quote was
+      truncated or rejected - and memories about an error are exactly the ones
+      full of quotes.
+
+      A file has no quoting rules at all.
+    #>
+    param([string]$Text)
+    $f = Join-Path $env:TEMP ("ctx-text-{0}.txt" -f [guid]::NewGuid().ToString('N').Substring(0, 12))
+    [System.IO.File]::WriteAllText($f, $Text, (New-Object System.Text.UTF8Encoding($false)))
+    return $f
+}
+
 function Show-Backlog {
     <#
       Say how many writes are queued, after any command that writes.
@@ -273,7 +292,8 @@ try {
             if (-not $Query) { Write-Error "search needs -Query '<what you are looking for>'" }
             # Read is always repo + global. Two calls rather than one, so each
             # result set is labelled and a hit cannot be mistaken for the other scope.
-            $common = @('-m', 'src.scripts.memory_search', '--query', $Query, '--top-k', $TopK)
+            $queryFile = New-TextFile -Text $Query
+            $common = @('-m', 'src.scripts.memory_search', '--query-file', $queryFile, '--top-k', $TopK)
             if ($Threshold -ge 0) { $common += @('--threshold', $Threshold) }
             if ($Json) { $common += '--json' }
             Write-Host "--- repo: $RepoKey ---"
@@ -320,7 +340,8 @@ try {
                 Write-Host "GLOBAL scope: this memory will surface on every repository." -ForegroundColor Yellow
             }
             $a = @('-m', 'src.scripts.memory_store', '--scope', $scopeName, '--key', $scopeKey,
-                   '--kind', $Kind, '--text', $Text, '--confidence', $Confidence, '--importance', $Importance)
+                   '--kind', $Kind, '--text-file', (New-TextFile -Text $Text),
+                   '--confidence', $Confidence, '--importance', $Importance)
             if ($Topic) { $a += @('--topic', $Topic) }
             foreach ($t in $Tag) { $a += @('--tag', $t) }
             if ($Json) { $a += '--json' }

@@ -10,6 +10,7 @@ capped rather than exhaustive.
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import sys
 
 from src.memory.scopes import Scope
@@ -21,17 +22,34 @@ def main(argv: list[str] | None = None) -> int:
     configure_stdout()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_scope_arguments(parser)
-    parser.add_argument("--query", required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--query")
+    source.add_argument(
+        "--query-file",
+        dest="query_file",
+        help="read the query from this UTF-8 file. A shell re-splits a quoted "
+        "argument, and a truncated query returns confident results for a "
+        "question nobody asked.",
+    )
     parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument("--threshold", type=float, default=None)
     add_common_arguments(parser)
     args = parser.parse_args(argv)
 
+    if args.query_file:
+        try:
+            query = Path(args.query_file).read_text(encoding="utf-8").strip()
+        except OSError as error:
+            print(f"error: cannot read --query-file: {error}", file=sys.stderr)
+            return 2
+    else:
+        query = args.query
+
     provider = provider_from_env()
     try:
         results = provider.search(
             SearchQuery(
-                query=args.query,
+                query=query,
                 scope=Scope.parse(args.scope),
                 scope_key=args.key,
                 top_k=args.top_k,

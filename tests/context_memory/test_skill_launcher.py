@@ -84,3 +84,47 @@ def test_the_extraction_catches_a_bad_scope_word():
     broken = "$repoOut = & $Python @common --scope repository --key $RepoKey\n"
     assert scope_words_handed_to_the_cli(broken) == {"repository"}
     assert "repository" not in set(SCOPES)
+
+
+# ------------------------------------------- free text must not go through argv
+
+
+def test_the_launcher_hands_text_and_query_to_python_through_a_file(launcher_text):
+    """PowerShell 5.1 re-splits a quoted argument on its way to a native exe.
+
+    Measured: `a memory containing "quoted text" in the middle` arrives as THREE
+    arguments, and argv[1] is `a memory containing quoted`. Storing a memory that
+    quotes an error message - which is most of the memories worth keeping - was
+    rejected, and the same split on a query would return confident results for a
+    question nobody asked.
+    """
+    assert "--text-file" in launcher_text, "the memory text must not be passed as an argv value"
+    assert "--query-file" in launcher_text, "the query must not be passed as an argv value"
+    assert "'--text', $Text" not in launcher_text
+    assert "'--query', $Query" not in launcher_text
+
+
+def test_the_clis_accept_a_file_for_anything_free_form(capsys):
+    # The launcher's fix only works if the other side reads it. Asserted against
+    # --help, which is the interface a caller actually has, rather than against
+    # the parser internals - the flags live on a mutually-exclusive group, so
+    # inspecting ArgumentParser alone would miss them and pass by construction.
+    from src.scripts import memory_search, memory_store
+
+    for module, flag in ((memory_store, "--text-file"), (memory_search, "--query-file")):
+        try:
+            module.main(["--help"])
+        except SystemExit:
+            pass
+        printed = capsys.readouterr().out
+        assert flag in printed, f"{module.__name__} does not offer {flag}"
+
+
+def test_a_file_and_an_inline_value_cannot_both_be_given(capsys):
+    # They would disagree, and silently preferring one would store something the
+    # caller did not ask for.
+    from src.scripts import memory_store
+
+    with pytest.raises(SystemExit):
+        memory_store.main(["--scope", "repo", "--key", "k", "--text", "a", "--text-file", "b"])
+    assert "not allowed with" in capsys.readouterr().err

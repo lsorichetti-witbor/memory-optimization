@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from datetime import datetime, timezone
 
@@ -34,7 +35,15 @@ def main(argv: list[str] | None = None) -> int:
     configure_stdout()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_scope_arguments(parser)
-    parser.add_argument("--text", required=True, help="the memory itself, stored verbatim")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--text", help="the memory itself, stored verbatim")
+    source.add_argument(
+        "--text-file",
+        dest="text_file",
+        help="read the memory from this UTF-8 file instead of the command line. "
+        "Use it for anything containing quotes: a shell re-splits a quoted "
+        "argument and the memory arrives truncated or rejected.",
+    )
     parser.add_argument("--kind", default="note", choices=KINDS)
     parser.add_argument("--topic", default=None, help="stable key used for conflict detection")
     parser.add_argument("--tag", action="append", default=[], dest="tags")
@@ -52,13 +61,25 @@ def main(argv: list[str] | None = None) -> int:
     scope = Scope.parse(args.scope)
     now = datetime.now(timezone.utc)
 
+    if args.text_file:
+        try:
+            text = Path(args.text_file).read_text(encoding="utf-8")
+        except OSError as error:
+            print(f"error: cannot read --text-file: {error}", file=sys.stderr)
+            return 2
+    else:
+        text = args.text
+    if not text.strip():
+        print("error: the memory is empty", file=sys.stderr)
+        return 2
+
     # The queueing lives in DurableProvider now, so every writer gets it rather
     # than only this one. All that is left here is reporting it.
     provider = provider_from_env()
 
     try:
         records = provider.add(
-            args.text,
+            text,
             scope=scope,
             scope_key=args.key,
             kind=args.kind,
