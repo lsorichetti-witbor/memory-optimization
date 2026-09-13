@@ -30,6 +30,21 @@ const PAGE_SIZE = 20;
 // Keep in sync with ALL_MEMORIES_LIMIT in server/main.py.
 const MEMORY_FETCH_LIMIT = 1000;
 
+/**
+ * Where a memory belongs, from the metadata the API already returns.
+ *
+ * Not the same thing as agent_id: a global-scope memory has no agent at all,
+ * and branch/session/task memories all carry the repository's agent id, so the
+ * Agent column cannot tell them apart. One helper because the table column and
+ * the detail panel must not drift into disagreeing about the same memory.
+ */
+function scopeLabel(metadata: Memory["metadata"]): string {
+  const scope = metadata?.scope as string | undefined;
+  const key = metadata?.scope_key as string | undefined;
+  if (!scope) return "--";
+  return !key || scope === key ? scope : `${scope}:${key}`;
+}
+
 export default function MemoriesPage() {
   const [userId, setUserId] = useState("");
   const [selectedMemory, setSelectedMemory] = useState<Memory | null>(null);
@@ -98,12 +113,7 @@ export default function MemoriesPage() {
       key: "metadata" as keyof Memory,
       label: "Scope",
       width: 140,
-      render: (value: Memory["metadata"]) => {
-        const scope = value?.scope as string | undefined;
-        const key = value?.scope_key as string | undefined;
-        if (!scope) return "--";
-        return scope === key || !key ? scope : `${scope}:${key}`;
-      },
+      render: (value: Memory["metadata"]) => scopeLabel(value),
     },
     {
       key: "created_at" as keyof Memory,
@@ -259,6 +269,36 @@ export default function MemoriesPage() {
                     <p className="text-sm">{selectedMemory.agent_id}</p>
                   </div>
                 )}
+                {scopeLabel(selectedMemory.metadata) !== "--" && (
+                  <div className="space-y-1">
+                    <Label className="text-xs text-onSurface-default-tertiary">
+                      Scope
+                    </Label>
+                    <p className="text-sm">
+                      {scopeLabel(selectedMemory.metadata)}
+                    </p>
+                  </div>
+                )}
+                {selectedMemory.metadata?.topic ? (
+                  <div className="space-y-1">
+                    <Label className="text-xs text-onSurface-default-tertiary">
+                      Topic
+                    </Label>
+                    <p className="text-sm font-mono">
+                      {String(selectedMemory.metadata.topic)}
+                    </p>
+                  </div>
+                ) : null}
+                {selectedMemory.metadata?.lifecycle ? (
+                  <div className="space-y-1">
+                    <Label className="text-xs text-onSurface-default-tertiary">
+                      Lifecycle
+                    </Label>
+                    <p className="text-sm">
+                      {String(selectedMemory.metadata.lifecycle)}
+                    </p>
+                  </div>
+                ) : null}
                 {selectedMemory.created_at && (
                   <div className="space-y-1">
                     <Label className="text-xs text-onSurface-default-tertiary">

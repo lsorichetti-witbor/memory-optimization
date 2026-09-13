@@ -85,7 +85,20 @@ Seven measured incidents, `scope=global`, `kind=incident`, one topic each:
 | `rule.generated_artifact_unit` | a reverted view described a structure its source no longer had |
 | `rule.generated_churn` | a no-op rebuild rewrote 833 of 1,217 files, all renumbering |
 
-Plus `context_memory.mcp_server` as `kind=decision`.
+Plus four retrieval findings learned since.
+
+**These memories are reproducible from version control**, in
+`src/evaluation/global_seed.py`, restored with:
+
+```powershell
+.\.venv\Scripts\python.exe -m src.scripts.memory_seed --shared
+```
+
+That matters more than it looks. After this refactor the rules stayed in
+`CLAUDE.md` and the evidence moved to Mem0, so these memories became the only
+record of why several rules exist. Leaving them only in a database would have
+put the sole copy somewhere nothing backs up. Verified by wiping the store
+entirely and restoring from code: 16 memories back, benchmarks unchanged.
 
 **Retrieval verified, not assumed** — each returns its own incident from the
 shared scope at 0.70–0.76, against a ~0.50 noise floor:
