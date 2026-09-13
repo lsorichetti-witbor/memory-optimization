@@ -115,7 +115,7 @@ with the provider down:
 docker compose --project-directory server exec -T mem0 python - < scripts/test-pending-queue.py
 ```
 
-21 checks. To measure whether selection is still earning its place:
+25 checks. To measure whether selection is still earning its place:
 
 ```powershell
 & "$env:USERPROFILE\.claude\skills\context-memory\scripts\ctx.ps1" eval

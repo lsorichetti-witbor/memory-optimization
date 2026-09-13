@@ -210,6 +210,94 @@ def main() -> int:
               len(mine(pending.claim_batch(db, limit=5))) == 1)
         clean(db)
 
+    # -- the buttons must not disturb rows already in the queue -------------
+    print("\nbutton safety")
+    with SessionLocal() as db:
+        clean(db)
+        normal = add(db, "normal pending")
+        stuck = add(db, "stuck pending")
+        db.query(PendingMemory).filter(PendingMemory.id == stuck.id).update(
+            {"next_attempt_at": pending._utcnow() + timedelta(hours=1)}
+        )
+        busy = add(db, "busy embedding")
+        pending.claim_batch(db, limit=10)
+        db.query(PendingMemory).filter(
+            PendingMemory.text.like(f"{PREFIX}%"), PendingMemory.id != busy.id
+        ).update({"state": "pending", "claimed_by": None, "lease_until": None},
+                 synchronize_session=False)
+        db.commit()
+
+        def snapshot():
+            return {
+                r.id: (r.state, r.attempts, r.claimed_by)
+                for r in db.query(PendingMemory).filter(PendingMemory.text.like(f"{PREFIX}%"))
+            }
+
+        from sqlalchemy import update as sa_update
+
+        before = snapshot()
+        now = pending._utcnow()
+
+        # exactly what Refresh runs
+        db.execute(
+            sa_update(PendingMemory)
+            .where(PendingMemory.state.in_(["error", "dead"]))
+            .values(state="pending", next_attempt_at=now, attempts=0)
+        )
+        db.commit()
+        check("Refresh leaves pending and embedding rows untouched", snapshot() == before)
+
+        # what Send all adds on top
+        db.execute(
+            sa_update(PendingMemory)
+            .where(PendingMemory.state == "pending", PendingMemory.next_attempt_at > now)
+            .values(next_attempt_at=now)
+        )
+        db.commit()
+        after = snapshot()
+        check("Send all changes no state, attempts or claim", after == before)
+        check("Send all does not touch the row a worker holds",
+              after[busy.id][0] == "embedding" and after[busy.id][2] is not None)
+        clean(db)
+
+    # A claim and a Send all racing: the row lock has to serialise them, or a
+    # row could be modified out from under the worker embedding it.
+    with SessionLocal() as db:
+        clean(db)
+        for i in range(6):
+            add(db, f"raced {i}")
+
+    raced: dict[str, int] = {}
+    gate = threading.Barrier(2)
+
+    def claimer() -> None:
+        with SessionLocal() as db:
+            gate.wait()
+            raced["claimed"] = len(mine(pending.claim_batch(db, limit=6)))
+
+    def sender() -> None:
+        from sqlalchemy import update as sa_update
+
+        with SessionLocal() as db:
+            gate.wait()
+            now = pending._utcnow()
+            res = db.execute(
+                sa_update(PendingMemory)
+                .where(PendingMemory.state == "pending", PendingMemory.next_attempt_at > now)
+                .values(next_attempt_at=now)
+            )
+            db.commit()
+            raced["touched"] = int(res.rowcount or 0)
+
+    c, s = threading.Thread(target=claimer), threading.Thread(target=sender)
+    c.start(), s.start(), c.join(), s.join()
+    with SessionLocal() as db:
+        rows = db.query(PendingMemory).filter(PendingMemory.text.like(f"{PREFIX}%")).all()
+        orphans = [r for r in rows if r.state == "embedding" and r.claimed_by is None]
+        check("a concurrent Send all leaves no claimed row without an owner", not orphans,
+              f"claimed={raced.get('claimed')} touched={raced.get('touched')}")
+        clean(db)
+
     # -- idempotency --------------------------------------------------------
     print("\nidempotency")
     with SessionLocal() as db:
