@@ -5,6 +5,12 @@ export interface Memory {
   agent_id?: string;
   created_at?: string;
   updated_at?: string;
+  /**
+   * Everything outside the reserved payload keys. A memory written with no
+   * agent_id still carries its scope here, so the table can show where it
+   * belongs instead of rendering an empty cell.
+   */
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface ApiKey {

@@ -6,6 +6,14 @@
 # Isolation: it uses its own CONTEXT_MEMORY_SPOOL and cleans up BY TOPIC, never
 # by scope. An earlier version cleaned by scope and destroyed the real shared
 # memories, which is the whole reason the cleanup is written the way it is.
+param(
+    # Leave the fixtures in the store instead of cleaning up. Use it when you
+    # want to SEE the multi-user / multi-repository result in the dashboard
+    # rather than only read that the checks passed. Re-run without -Keep to
+    # remove them again.
+    [switch]$Keep
+)
+
 $ErrorActionPreference = 'Continue'
 $repo = Split-Path -Parent $PSScriptRoot
 $py = "$repo\.venv\Scripts\python.exe"
@@ -115,6 +123,14 @@ $final = (Get-ChildItem "$spool\*.json" -ErrorAction SilentlyContinue).Count
 Record 'failed replay' 'recovers once reachable' '0 files' "$final files" ($final -eq 0)
 
 # ---- cleanup: remove ONLY what this test created ----
+if ($Keep) {
+    ""
+    "-Keep set: the fixtures were left in place for inspection."
+    "  users:        lautaro, teammate"
+    "  repositories: repo-alpha, repo-beta, repo-gamma"
+    "  shared scope: global"
+    "  Re-run without -Keep to remove them."
+} else {
 # By topic, not by scope. The shared scope holds real memories, and deleting the
 # whole scope to tidy up a test would destroy them - which is exactly what an
 # earlier version of this script did.
@@ -132,6 +148,7 @@ for u in ('lautaro','teammate'):
         except Exception: pass
     p.close()
 print('cleanup done, removed', removed)" 2>&1 | Select-Object -Last 1
+}
 
 Remove-Item -Recurse -Force $spool -ErrorAction SilentlyContinue
 Remove-Item Env:\CONTEXT_MEMORY_SPOOL -ErrorAction SilentlyContinue

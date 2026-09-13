@@ -86,13 +86,34 @@ export default function MemoriesPage() {
       ),
     },
     { key: "user_id" as keyof Memory, label: "User", width: 100 },
-    { key: "agent_id" as keyof Memory, label: "Agent", width: 100 },
+    {
+      key: "agent_id" as keyof Memory,
+      label: "Agent",
+      width: 100,
+      // A memory with no agent_id is not unattributed, it is scoped somewhere
+      // the agent id cannot express. An empty cell reads as missing data.
+      render: (value?: string) => value || "--",
+    },
+    {
+      key: "metadata" as keyof Memory,
+      label: "Scope",
+      width: 140,
+      render: (value: Memory["metadata"]) => {
+        const scope = value?.scope as string | undefined;
+        const key = value?.scope_key as string | undefined;
+        if (!scope) return "--";
+        return scope === key || !key ? scope : `${scope}:${key}`;
+      },
+    },
     {
       key: "created_at" as keyof Memory,
       label: "Created",
-      width: 120,
+      width: 165,
+      // Seconds included: memories written in one batch land in the same
+      // minute, and a date alone cannot order them or show which write won.
+      // The wire format is UTC (…+00:00); date-fns renders it in local time.
       render: (value: string) =>
-        value ? format(new Date(value), "MMM d, yyyy") : "--",
+        value ? format(new Date(value), "MMM d, yyyy HH:mm:ss") : "--",
     },
   ];
 
