@@ -1,7 +1,6 @@
 # Handoff section 19 — the CLAUDE.md refactor
 
-**Date:** 2026-09-13 · **Status:** built, benchmarked, **not yet applied to the
-live file** · **Result:** 40 of 40 rules preserved and still selected,
+**Date:** 2026-09-13 · **Status:** built, benchmarked, **applied 2026-09-13** · **Result:** 40 of 40 rules preserved and still selected,
 instruction tokens 3,911 → 3,242 (**−17.1%**)
 
 Candidate: [`CLAUDE.md.candidate`](CLAUDE.md.candidate) ·
@@ -157,26 +156,28 @@ Stated plainly, because the temptation is to read −17.1% as a clean win:
   `@`-imported, so the loaded token count is unchanged by relocation — the
   saving is from extraction and tightening, not from moving text around.
 
-## Applying it
+## Applied
 
-Not applied. The live `~/.claude/CLAUDE.md` is unchanged; the candidate sits in
-this directory. To apply:
+Applied on 2026-09-13. Verified against the live file, not the candidate:
 
-```powershell
-$src = "D:\Desktop D\Gestión\memory-optimization\docs\context-memory"
-Copy-Item "$env:USERPROFILE\.claude\CLAUDE.md" "$env:USERPROFILE\.claude\CLAUDE.md.bak-$(Get-Date -f yyyyMMdd)"
-Copy-Item "$src\CLAUDE.md.candidate" "$env:USERPROFILE\.claude\CLAUDE.md"
-Copy-Item "$src\candidate-rules\graphify.md" "$env:USERPROFILE\.claude\rules\graphify.md"
+```
+before: 40 of 40 rules present, 40 of 40 selected, 3242 instruction tokens
+EXIT=0
 ```
 
-Then re-verify against the live file:
+`~/.claude/CLAUDE.md` 15,273 -> 12,366 chars; `rules/graphify.md` created and
+`@rules/graphify.md` resolving. The extracted evidence still answers from the
+shared scope after the swap (`rule.truncated_output` at 0.658).
+
+Rollback, if a rule turns out to be missed in practice:
 
 ```powershell
-.\.venv\Scripts\python.exe -m src.scripts.instruction_eval --before "$env:USERPROFILE\.claude"
+Copy-Item "$env:USERPROFILE\.claude\CLAUDE.md.bak-20260913-182818" `
+          "$env:USERPROFILE\.claude\CLAUDE.md" -Force
 ```
 
-Expect `40 of 40 rules present, 40 of 40 selected`. The incidents are already in
-Mem0, so the evidence survives the swap either way.
+The backup is the pre-refactor file, confirmed to differ from the live one and
+to still carry the bullets that moved to Mem0.
 
 ## Re-running
 
