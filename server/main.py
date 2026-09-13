@@ -2,24 +2,28 @@ import asyncio
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+import pending
+import pending_worker
 import telemetry
 from auth import ADMIN_API_KEY, AUTH_DISABLED, JWT_SECRET, require_admin, verify_auth
 from db import SessionLocal
 from dotenv import load_dotenv
 from errors import (
     UpstreamError,
+    _classify,
     install_request_id_logging,
     new_request_id,
     request_id_var,
     upstream_error,
     upstream_error_handler,
 )
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
-from models import RequestLog, User
+from models import PendingMemory, RequestLog, User
 from pydantic import BaseModel, Field
 from rate_limit import limiter
 from routers import api_keys as api_keys_router
@@ -36,7 +40,7 @@ from server_state import (
 )
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from mem0.exceptions import ValidationError as Mem0ValidationError
 
@@ -210,6 +214,22 @@ app.include_router(auth_router.router)
 app.include_router(api_keys_router.router)
 app.include_router(entities_router.router)
 app.include_router(requests_router.router)
+
+
+@app.on_event("startup")
+async def _start_pending_worker() -> None:
+    """Drain the embedding queue in the background.
+
+    Started here rather than as its own container so a single-container
+    deployment still drains. Multiple replicas are safe: claims use
+    FOR UPDATE SKIP LOCKED, so two workers never take the same row.
+    """
+    pending_worker.start(get_memory_instance)
+
+
+@app.on_event("shutdown")
+async def _stop_pending_worker() -> None:
+    await pending_worker.stop()
 
 
 class Message(BaseModel):
@@ -405,21 +425,140 @@ def generate_instructions(req: GenerateInstructionsRequest, _auth=Depends(verify
 
 
 @app.post("/memories", summary="Create memories")
-def add_memory(memory_create: MemoryCreate, _auth=Depends(verify_auth)):
-    """Store new memories."""
+def add_memory(
+    memory_create: MemoryCreate,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    _auth=Depends(verify_auth),
+):
+    """Store new memories.
+
+    Inline first: the happy path is unchanged and still returns 200 with the
+    stored records. Only when the *embedder* refuses does the write divert into
+    the server-side queue and come back 202 - so a caller that never sees a
+    failure never sees a difference, and a caller that does gets "I have it,
+    it is not searchable yet" instead of "it is gone".
+    """
     if not any([memory_create.user_id, memory_create.agent_id, memory_create.run_id]):
         raise HTTPException(status_code=400, detail="At least one identifier (user_id, agent_id, run_id) is required.")
 
     params = {k: v for k, v in memory_create.model_dump().items() if v is not None and k != "messages"}
+    messages = [m.model_dump() for m in memory_create.messages]
+    key = idempotency_key or (memory_create.metadata or {}).get("idempotency_key")
+
+    # A retry of a request whose response never arrived is the normal case, not
+    # an error: answer it the same way twice rather than storing it twice.
+    if key:
+        with SessionLocal() as db:
+            existing = pending.find_existing(db, key)
+            if existing is not None:
+                return JSONResponse(
+                    status_code=202,
+                    content={"results": [], "queued": True, "pending_id": str(existing.id),
+                             "state": existing.state, "duplicate": True},
+                )
+
     try:
-        response = get_memory_instance().add(messages=[m.model_dump() for m in memory_create.messages], **params)
+        response = get_memory_instance().add(messages=messages, **params)
         if response.get("results"):
             telemetry.log_dashboard_nudge_once(DASHBOARD_URL)
         return JSONResponse(content=response)
     except (ValueError, Mem0ValidationError) as e:
         raise _client_error(e)
-    except Exception:
-        raise upstream_error()
+    except Exception as error:  # noqa: BLE001 - the classification decides
+        code, detail = _classify(error)
+        if code not in pending.QUEUEABLE_CODES:
+            # A malformed write, or something that says nothing about the
+            # provider. Queueing it would retry a guaranteed failure.
+            raise upstream_error()
+        text_content = "\n".join(m.get("content", "") for m in messages).strip()
+        if not text_content:
+            raise upstream_error()
+        try:
+            with SessionLocal() as db:
+                row = pending.enqueue(
+                    db, text=text_content,
+                    payload={**params, "messages": messages},
+                    idempotency_key=key, error=str(error), error_code=code,
+                )
+            pending.breaker.trip(code, detail)
+            pending_worker.wake()
+        except Exception:  # noqa: BLE001 - could not queue either; the client keeps it
+            raise upstream_error()
+        return JSONResponse(
+            status_code=202,
+            content={"results": [], "queued": True, "pending_id": str(row.id),
+                     "state": row.state, "reason": detail, "code": code},
+        )
+
+
+@app.get("/memories/pending", summary="The server-side embedding queue")
+def list_pending(state: Optional[str] = None, limit: int = 100, _auth=Depends(verify_auth)):
+    """Counts by state, and the rows themselves.
+
+    Exists because a queued memory is one that cannot be found by searching for
+    it. Without somewhere to see the backlog, an incomplete store looks exactly
+    like a complete one.
+    """
+    with SessionLocal() as db:
+        summary = pending.stats(db)
+        query = select(PendingMemory).order_by(PendingMemory.created_at)
+        if state:
+            query = query.where(PendingMemory.state == state)
+        rows = list(db.execute(query.limit(min(limit, 1000))).scalars())
+        return {
+            **summary,
+            "returned": len(rows),
+            "items": [
+                {
+                    "id": str(r.id),
+                    "state": r.state,
+                    "text": r.text,
+                    "user_id": (r.payload or {}).get("user_id"),
+                    "agent_id": (r.payload or {}).get("agent_id"),
+                    "run_id": (r.payload or {}).get("run_id"),
+                    "attempts": r.attempts,
+                    "last_error": r.last_error,
+                    "last_error_code": r.last_error_code,
+                    "next_attempt_at": r.next_attempt_at.isoformat() if r.next_attempt_at else None,
+                    "claimed_by": r.claimed_by,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                }
+                for r in rows
+            ],
+        }
+
+
+@app.post("/memories/pending/retry", summary="Re-arm queued memories now")
+def retry_pending(_auth=Depends(require_admin)):
+    """Move `error` and `dead` rows back to `pending` and wake the worker.
+
+    The manual counterpart to the automatic sweep: for when a person has fixed
+    the cause and does not want to wait out a backoff, or wants to give a
+    dead-lettered write another go.
+    """
+    with SessionLocal() as db:
+        db.execute(
+            update(PendingMemory)
+            .where(PendingMemory.state.in_([pending.ERROR, pending.DEAD]))
+            .values(state=pending.PENDING, next_attempt_at=datetime.now(timezone.utc), attempts=0)
+        )
+        db.commit()
+        summary = pending.stats(db)
+    pending.breaker.close()
+    pending_worker.wake()
+    return summary
+
+
+@app.delete("/memories/pending/{pending_id}", summary="Drop one queued memory")
+def delete_pending(pending_id: str, _auth=Depends(require_admin)):
+    """Discard a queued write. The only way one is ever removed unstored."""
+    with SessionLocal() as db:
+        row = db.execute(select(PendingMemory).where(PendingMemory.id == pending_id)).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(status_code=404, detail="No such queued memory.")
+        db.delete(row)
+        db.commit()
+    return {"deleted": pending_id}
 
 
 ALL_MEMORIES_LIMIT = 1000

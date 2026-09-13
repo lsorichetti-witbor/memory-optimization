@@ -237,6 +237,114 @@ Each of these has to be exercised deliberately, because all of them are silent:
 The property under test is always the same one, and it is not "did it store":
 it is **no write disappears without a human being told**.
 
+## Server-side queue (option C), implemented 2026-09-13
+
+The client spool stays - it is the only thing that survives "cannot reach the
+server at all". What moved server-side is the *other* job it was doing badly:
+holding a write because the **embedder** failed. That failure is server-wide, so
+one person's laptop was the wrong place for it. It was invisible to everyone
+else, drained only when that person ran a command, and each client retried
+independently against the same shared quota.
+
+```
+ANY client (ctx · agent · dashboard · MCP)
+   |
+   [WAL] client spool          now covers ONE case: "could not hand it over"
+   |
+   v  POST /memories  (+ Idempotency-Key)
+   |
+   +-- key already queued or stored? --> 202 duplicate, client deletes its entry
+   |
+   v
+ TRY INLINE EMBED  .......... happy path unchanged: still 200 + records
+   |
+   +-- embed OK ---> INSERT memories(vector, payload) --------------> 200
+   |
+   +-- embed FAILS, and the code is queueable
+          |
+          v
+   INSERT pending_memories(state='pending')   <-- durable here
+          |
+          v
+        202 Accepted ---> client deletes its spool entry. Client is done.
+
+   worker (in-process, started with the app)
+      TRIGGERS: on enqueue · on startup · on the backoff timer · on any success
+      |
+      claim ---> embed ---> insert into the vector store ---> delete the row
+        |          |
+        |          +-- fail: state='error', attempts+1, next_attempt_at
+        |                    attempts >= 12 --> state='dead' (never deleted)
+        |
+        +-- claim is: UPDATE ... WHERE id IN (
+                        SELECT id ... FOR UPDATE SKIP LOCKED LIMIT n)
+            plus lease_until, so a worker that dies releases its rows
+```
+
+**Inline first** is why nothing broke: a caller that never sees a failure never
+sees a difference. The 502 became a 202.
+
+### pending vs error
+
+Two states, because they mean different things and only one is worth re-arming.
+`pending` is "nobody has tried yet". `error` is "the provider refused". When any
+embedding succeeds, every `error` row is swept back to `pending` and its backoff
+discarded - that success is fresh evidence the outage is over, and the delays
+were guesses about a condition that has since changed. `dead` rows are left
+alone: they failed for a reason a working provider does not explain.
+
+### Not processing the same embedding twice
+
+Three different collisions, three answers:
+
+| Collision | Answer |
+|---|---|
+| Two workers, one row | `FOR UPDATE SKIP LOCKED` + `lease_until`. Verified: two concurrent claimers split 4 rows 1/3 with **zero overlap**. |
+| A worker dies holding rows | Lease expiry makes them claimable again. Verified: re-claimable after the lease, not before. |
+| Two users, identical text | `content_hash` (the same md5 mem0 stores) serves the vector from an existing row instead of calling the provider. Only for `memory_action="add"` - Gemini embeds per task type, so reusing a "search" vector for "add" would quietly degrade ranking. |
+| The same request twice | `idempotency_key` is `UNIQUE`; a retry returns the same `pending_id` with `duplicate: true`. |
+
+### Circuit breaker
+
+A queue of N rows must not discover one outage N times. On the free tier that is
+not a nicety: 1,000 embeddings a day, and letting each row find out for itself
+that the quota is gone spends the next day's allowance on failures, so the queue
+would guarantee it could never drain.
+
+So a provider-wide failure parks the whole queue and one probe is let through
+when the window opens. A daily quota waits an hour, not the `retryDelay: 2s`
+Google returns even on a daily exhaustion. A malformed row does **not** trip it -
+that is one row's problem.
+
+Note the default is deliberately the **opposite** of the client spool's. There,
+an unrecognised error must *keep* the write, because being wrong costs a memory.
+Here, an unrecognised error must *not* park the queue, because being wrong costs
+every other row a stall - and those rows are already safe on disk. Same
+principle, different cheap direction.
+
+The breaker is in-memory, so a restart forgets it. That is survivable rather
+than ideal: each row's own `next_attempt_at` is in the database, so a fresh
+breaker cannot cause a retry storm - it costs at most one probe per restart.
+
+### Where to see it
+
+`/dashboard/queue` in the sidebar: counts by state, the parked banner with its
+next probe time, per-row attempts and last error, "retry all now", and discard.
+`ctx health` prints the same counts and **exits non-zero while anything is
+unsearchable** - a green health check with an incomplete store is the exact
+reassuring-but-wrong answer this layer exists to prevent.
+
+### What this deliberately does not do
+
+An unembedded memory is **not** in the vector table at all - it lives in
+`pending_memories`. That was the objection to server-side queueing in the first
+place: a null-vector row in `memories` would be a memory that exists but cannot
+be found, and the column is nullable so nothing would catch it. Keeping them
+apart makes an unembedded memory structurally invisible to search rather than
+invisibly missing from it, and the count is reported as `not_searchable`.
+
+Ordering is not preserved: batched claims mean B can become searchable before A.
+
 ## What was verified
 
 Against the running stack, with the Gemini daily quota genuinely exhausted, so

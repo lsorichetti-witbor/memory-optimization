@@ -9,6 +9,7 @@ import {
   FolderInput,
   GalleryVerticalEnd,
   KeyRound,
+  ListRestart,
   Settings,
   Tags,
   Users,
@@ -80,6 +81,12 @@ export function MainNav({
                     url: "/dashboard/entities",
                     icon: Users,
                     active: pathname === "/dashboard/entities",
+                  },
+                  {
+                    title: "Queue",
+                    url: "/dashboard/queue",
+                    icon: ListRestart,
+                    active: pathname === "/dashboard/queue",
                   },
                 ].map((item) => (
                   <SidebarMenuItem key={item.title}>

@@ -27,6 +27,12 @@ export const REQUEST_ENDPOINTS = {
   BASE: "/requests",
 } as const;
 
+export const PENDING_ENDPOINTS = {
+  BASE: "/memories/pending",
+  RETRY: "/memories/pending/retry",
+  BY_ID: (id: string) => `/memories/pending/${encodeURIComponent(id)}`,
+} as const;
+
 export const ENTITY_ENDPOINTS = {
   BASE: "/entities",
   BY_ID: (type: string, id: string) =>

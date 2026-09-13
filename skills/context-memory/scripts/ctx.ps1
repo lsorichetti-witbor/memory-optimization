@@ -198,6 +198,36 @@ try {
             $deadCount = [int]($spoolInfo | Select-Object -Skip 1 -First 1)
             $spoolRoot = ($spoolInfo | Select-Object -Last 1)
             Write-Host "spool:           $count queued, $deadCount dead  ($spoolRoot)"
+
+            # The server has its own queue, for writes it accepted but could not
+            # embed. Those are safe but NOT searchable, and the client spool says
+            # nothing about them - a health check that showed only the local
+            # queue would report all-clear while the store was incomplete.
+            $srvPending = 0; $srvDead = 0; $srvBreaker = $null
+            try {
+                $resp = Invoke-RestMethod -Uri "$($env:MEM0_API_URL)/memories/pending" `
+                    -Headers @{ 'X-API-Key' = $env:MEM0_API_KEY } -TimeoutSec 5
+                $srvPending = [int]$resp.not_searchable
+                $srvDead = [int]$resp.dead
+                $srvBreaker = $resp.circuit_breaker
+                Write-Host "server queue:    $srvPending not searchable ($($resp.pending) pending, $($resp.error) error, $srvDead dead)"
+            } catch {
+                Write-Host "server queue:    unavailable (older server, or the API is down)"
+            }
+            if ($srvPending -gt 0) {
+                Write-Host ""
+                Write-Host "$srvPending memory write(s) are stored on the server but NOT searchable yet." -ForegroundColor Yellow
+                # No ?? operator in PowerShell 5.1 - it is a parser error, not a
+                # fallback, and it takes the whole script down at load time.
+                $dash = if ($env:DASHBOARD_URL) { $env:DASHBOARD_URL } else { 'http://localhost:3000' }
+                Write-Host "  See them at $dash/dashboard/queue" -ForegroundColor Yellow
+            }
+            if ($srvBreaker -and $srvBreaker.open) {
+                Write-Host ""
+                Write-Host "Server embedding queue is PARKED: $($srvBreaker.code)" -ForegroundColor Red
+                Write-Host "  $($srvBreaker.reason)" -ForegroundColor Red
+                Write-Host "  next probe: $($srvBreaker.retry_at)" -ForegroundColor Red
+            }
             if ($count -gt 0) {
                 Write-Host ""
                 Write-Host "$count memory write(s) are queued and NOT stored. Replay them with:" -ForegroundColor Yellow
@@ -212,10 +242,11 @@ try {
                 Write-Host ""
                 Write-Host "Start it with: & '$Home_\scripts\stack.ps1' up" -ForegroundColor Yellow
             }
-            # Non-zero while anything is unstored, not only when the API is down.
-            # A green health check with writes sitting in the queue is exactly
-            # the reassuring-but-wrong answer this whole layer exists to avoid.
-            if ($api -eq 'down' -or $count -gt 0 -or $deadCount -gt 0) {
+            # Non-zero while anything is unstored OR unsearchable, not only when
+            # the API is down. A green health check with writes sitting in either
+            # queue is exactly the reassuring-but-wrong answer this whole layer
+            # exists to avoid.
+            if ($api -eq 'down' -or $count -gt 0 -or $deadCount -gt 0 -or $srvPending -gt 0) {
                 $script:ExitCode = 1
             } else {
                 $script:ExitCode = 0
