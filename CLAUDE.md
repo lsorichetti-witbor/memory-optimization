@@ -84,6 +84,52 @@ Quick start on a machine that is already set up:
    failure — `memory_flush` and `memory_backup restore` are the two exceptions,
    and both say why in a docstring.
 
+## Open TODOs
+
+Kept here rather than in Mem0, deliberately. Both of these are about the memory
+layer not yet being proven, and storing them *in* that layer would mean trusting
+the thing under test to remember what has not been tested — a memory that cannot
+be retrieved is indistinguishable from one that was never written. **Move them
+into Mem0 once TODO 1 closes, and delete this section then.**
+
+### 1. Five end-to-end checks have never run
+
+`scripts/test-end-to-end.ps1` reports them as **BLOCKED**, not passed, while the
+Gemini daily embedding quota is spent:
+
+- alpha sees its own memory
+- alpha does **not** see beta's memory
+- the global memory is visible from alpha
+- the server queue empties
+- a queued memory becomes searchable
+
+Every *failure* path is verified against the real failure. The **success** leg of
+the write path — a queued memory draining and becoming searchable — is covered by
+unit tests with a fake provider only, and has never been observed end to end.
+
+To close it: wait for the quota to reset, then
+
+```powershell
+.\scripts\test-end-to-end.ps1        # probes the embedder first; expect 25 of 25
+.\scripts\test-offline-spool.ps1     # 13 of 23 today, for the same reason
+```
+
+Both should reach full marks. Until they do, treat "writes are never lost" as
+verified on the failure side and *assumed* on the success side.
+
+### 2. No MCP server
+
+`ctx.ps1` and the Python CLIs are the only entry points. Every non-Python
+caller — the dashboard, an editor, another agent runtime — gets the server-side
+embedding queue but **not** the client spool, which is the only thing that
+survives being unable to reach the server at all.
+
+An MCP server exposing build / search / store / flush over the same
+`DurableProvider` would give those callers the write-ahead spool too. Recorded as
+a known limit in
+[docs/context-memory/ARCHITECTURE.md](docs/context-memory/ARCHITECTURE.md).
+Not started.
+
 ## Verifying a change
 
 ```powershell
@@ -129,7 +175,7 @@ And the whole path a write takes, driven through the launcher from directories
 standing in for separate checkouts, as a person or an agent would:
 
 ```powershell
-.\scripts	est-end-to-end.ps1
+.\scripts\test-end-to-end.ps1
 ```
 
 20 checks: server down, server up with the embedder refusing, the auto-drain,
