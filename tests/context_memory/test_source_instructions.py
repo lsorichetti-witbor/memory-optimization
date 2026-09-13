@@ -19,12 +19,31 @@ def test_collects_claude_and_agents_files(tmp_path):
     assert any("pnpm" in i.content for i in items)
 
 
-def test_every_instruction_item_is_pinned(tmp_path):
-    # Policy must never be dropped by the budget.
+def test_instructions_on_the_task_path_are_pinned(tmp_path):
+    # Policy that applies to this task must never be dropped by the budget.
     write(tmp_path, "CLAUDE.md", "# P\n\nA rule.\n")
     items = InstructionsSource(root=tmp_path).collect(Task(description="x"))
     assert items
     assert all(i.pinned for i in items)
+
+
+def test_instructions_from_unrelated_directories_are_not_pinned(tmp_path):
+    # A polyglot monorepo has one AGENTS.md per package. Pinning all of them made
+    # 13,373 tokens of "policy" unskippable against an 8,000 token budget, and the
+    # build raised rather than ran. The repo's own rule is to read the AGENTS.md
+    # NEAREST the files being edited - so distant ones are candidates, not policy.
+    write(tmp_path, "AGENTS.md", "# Root\n\nRoot rule.\n")
+    write(tmp_path, "server/AGENTS.md", "# Server\n\nServer rule.\n")
+    write(tmp_path, "cli/node/AGENTS.md", "# Cli\n\nCli rule.\n")
+    items = {
+        i.source: i
+        for i in InstructionsSource(root=tmp_path).collect(
+            Task(description="edit", files=("server/main.py",))
+        )
+    }
+    assert items["AGENTS.md"].pinned is True
+    assert items["server/AGENTS.md"].pinned is True
+    assert items["cli/node/AGENTS.md"].pinned is False
 
 
 def test_nearest_instructions_outrank_root_ones(tmp_path):
@@ -34,6 +53,36 @@ def test_nearest_instructions_outrank_root_ones(tmp_path):
     items = InstructionsSource(root=tmp_path).collect(task)
     by_source = {i.source: i for i in items}
     assert by_source["server/AGENTS.md"].signals.importance > by_source["AGENTS.md"].signals.importance
+
+
+def test_instruction_files_outside_the_task_directories_are_still_collected(tmp_path):
+    # Measured on the real repo: 11 AGENTS.md files, but only the root one and
+    # those on a task file's path were reachable. A question about the server
+    # could not see server/AGENTS.md unless the task happened to name a file
+    # under server/ - and a missing candidate reads as bad ranking.
+    write(tmp_path, "AGENTS.md", "# Root\n\nRoot rule.\n")
+    write(tmp_path, "server/AGENTS.md", "# Server\n\nServer rule.\n")
+    items = InstructionsSource(root=tmp_path).collect(Task(description="how do I start the server"))
+    assert any(i.source == "server/AGENTS.md" for i in items)
+
+
+def test_a_task_file_still_outranks_a_merely_discovered_instruction_file(tmp_path):
+    write(tmp_path, "server/AGENTS.md", "# Server\n\nServer rule.\n")
+    write(tmp_path, "cli/AGENTS.md", "# Cli\n\nCli rule.\n")
+    items = {
+        i.source: i
+        for i in InstructionsSource(root=tmp_path).collect(
+            Task(description="edit", files=("server/main.py",))
+        )
+    }
+    assert items["server/AGENTS.md"].signals.importance > items["cli/AGENTS.md"].signals.importance
+
+
+def test_vendor_directories_are_never_walked_for_instructions(tmp_path):
+    write(tmp_path, "AGENTS.md", "# Root\n\nRoot rule.\n")
+    write(tmp_path, "node_modules/pkg/AGENTS.md", "# Vendor\n\nNot ours.\n")
+    items = InstructionsSource(root=tmp_path).collect(Task(description="x"))
+    assert all(not i.source.startswith("node_modules/") for i in items)
 
 
 def test_a_directory_with_no_instruction_files_contributes_nothing(tmp_path):

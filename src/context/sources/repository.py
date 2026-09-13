@@ -19,6 +19,7 @@ from src.context.sources.base import ContextSource
 from src.context.types import ContextItem, Layer, Signals, Task
 
 DEFAULT_MAX_FILE_BYTES = 200_000
+DEFAULT_MAX_FILES = 400
 _BINARY_PROBE_BYTES = 8192
 
 MANIFESTS = (
@@ -28,17 +29,63 @@ MANIFESTS = (
     "docker-compose.yml",
     "requirements.txt",
     "Makefile",
+    # The canonical list of every configuration variable a service accepts, and
+    # the file the server's own AGENTS.md points at for configuration. It is a
+    # manifest in every sense except the extension.
+    ".env.example",
 )
+
+# NOT collected, stated so the limit is visible rather than discovered:
+# source files (except those named in `task.files`) and dotfile config such as
+# .gitattributes. A question whose answer lives only in code is unanswerable
+# from this layer, and the evaluation harness reports that as an unreachable
+# ground-truth item rather than as a ranking failure.
+
+# Walked anywhere in the tree, not just at the root. Measured on this repo: 30
+# README.md files and 1 docker-compose.yaml, none of them at the root except the
+# top README - a root-only list made most of the repository unreachable, and an
+# unreachable file reads downstream as a ranking failure rather than as missing
+# input.
+NESTED_DOC_NAMES = ("README.md",)
+
+EXCLUDED_DIRS = frozenset(
+    {
+        ".git",
+        ".venv",
+        "venv",
+        "node_modules",
+        "__pycache__",
+        ".pytest_cache",
+        ".next",
+        ".turbo",
+        "dist",
+        "build",
+        "site-packages",
+        ".mypy_cache",
+        ".ruff_cache",
+        "coverage",
+        ".tox",
+    }
+)
+
+
+def is_excluded(relative_parts: tuple[str, ...]) -> bool:
+    return any(part in EXCLUDED_DIRS for part in relative_parts)
 
 
 @dataclass
 class RepositoryReport:
     considered: int = 0
     collected: int = 0
+    capped: bool = False
     skipped: dict[str, str] = field(default_factory=dict)
 
     def summary(self) -> str:
-        return f"{self.collected} of {self.considered} repository files collected, {len(self.skipped)} skipped"
+        tail = " (file cap reached - the walk was truncated)" if self.capped else ""
+        return (
+            f"{self.collected} of {self.considered} repository files collected, "
+            f"{len(self.skipped)} skipped{tail}"
+        )
 
 
 class RepositorySource(ContextSource):
@@ -47,10 +94,12 @@ class RepositorySource(ContextSource):
         root: Path,
         max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
         max_chars: int = 4000,
+        max_files: int = DEFAULT_MAX_FILES,
     ) -> None:
         self._root = Path(root)
         self._max_file_bytes = max_file_bytes
         self._max_chars = max_chars
+        self._max_files = max_files
         self.last_error: Optional[BaseException] = None
         self.last_report = RepositoryReport()
 
@@ -62,6 +111,20 @@ class RepositorySource(ContextSource):
     def layer(self) -> Layer:
         return Layer.REPOSITORY
 
+    def _walk(self, names: tuple[str, ...]) -> list[Path]:
+        """Every file with one of these names, anywhere except a vendor directory."""
+        found: list[Path] = []
+        for name in names:
+            for path in self._root.rglob(name):
+                try:
+                    relative = path.relative_to(self._root).parts
+                except ValueError:
+                    continue
+                if is_excluded(relative) or not path.is_file():
+                    continue
+                found.append(path)
+        return sorted(found, key=lambda p: (len(p.relative_to(self._root).parts), p.as_posix()))
+
     def _candidates(self, task: Task) -> list[Path]:
         found: list[Path] = []
 
@@ -69,19 +132,21 @@ class RepositorySource(ContextSource):
             if path not in found:
                 found.append(path)
 
-        readme = self._root / "README.md"
-        if readme.is_file():
-            add(readme)
+        # Task files first: they are the only candidates the caller named
+        # explicitly, so they must survive the file cap.
+        for file in task.files:
+            add(self._root / file)
+
         docs = self._root / "docs"
         if docs.is_dir():
             for path in sorted(docs.rglob("*.md")):
-                add(path)
-        for manifest in MANIFESTS:
-            path = self._root / manifest
-            if path.is_file():
-                add(path)
-        for file in task.files:
-            add(self._root / file)
+                if not is_excluded(path.relative_to(self._root).parts):
+                    add(path)
+
+        for path in self._walk(NESTED_DOC_NAMES):
+            add(path)
+        for path in self._walk(MANIFESTS):
+            add(path)
         return found
 
     def _readable(self, path: Path, relative: str) -> Optional[str]:
@@ -105,7 +170,13 @@ class RepositorySource(ContextSource):
         items: list[ContextItem] = []
 
         try:
-            for path in self._candidates(task):
+            candidates = self._candidates(task)
+            if len(candidates) > self._max_files:
+                # Say the walk was truncated. A silently capped candidate set
+                # makes a missing file look like a ranking decision.
+                self.last_report.capped = True
+                candidates = candidates[: self._max_files]
+            for path in candidates:
                 try:
                     relative = path.relative_to(self._root).as_posix()
                 except ValueError:

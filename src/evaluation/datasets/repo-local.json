@@ -1,0 +1,111 @@
+{
+  "name": "repo-local",
+  "source": "repo-local",
+  "description": "Questions about this repository whose answers live in known files or in seeded memories. Ground truth is source PATHS for file layers and mem0:<topic> for the memory layer - both stable across edits and re-seeds, unlike chunk ids and Mem0 uuids. Run `python -m src.scripts.context_eval --seed` first, or the memory arms score against whatever happens to be stored. This is NOT LongMemEval: a handful of cases about one repository cannot support a claim about general retrieval quality, and any weight tuned here has been measured on a different basis than a published benchmark number.",
+  "cases": [
+    {
+      "id": "vector-store",
+      "question": "which vector store does the self-hosted server use and on what port",
+      "relevant": [
+        "README.md",
+        "mem0:server.graph_store",
+        "server/AGENTS.md",
+        "server/docker-compose.yaml"
+      ],
+      "answer_contains": [
+        "pgvector"
+      ],
+      "repository": "memory-optimization"
+    },
+    {
+      "id": "package-manager",
+      "question": "which package manager must be used for typescript packages in this repo",
+      "relevant": [
+        "AGENTS.md"
+      ],
+      "answer_contains": [
+        "pnpm"
+      ],
+      "repository": "memory-optimization"
+    },
+    {
+      "id": "llm-provider-config",
+      "question": "how do I change which LLM provider the self-hosted server uses",
+      "relevant": [
+        "mem0:server.default_provider",
+        "server/.env.example",
+        "server/AGENTS.md",
+        "server/main.py"
+      ],
+      "answer_contains": [
+        "MEM0_DEFAULT_LLM_PROVIDER"
+      ],
+      "files": [
+        "server/main.py"
+      ],
+      "repository": "memory-optimization"
+    },
+    {
+      "id": "python-lint-config",
+      "question": "what line length does ruff enforce for the root python package",
+      "relevant": [
+        "pyproject.toml",
+        "AGENTS.md"
+      ],
+      "answer_contains": [
+        "120"
+      ],
+      "repository": "memory-optimization"
+    },
+    {
+      "id": "context-precedence",
+      "question": "what happens when a stored memory disagrees with the current repository",
+      "relevant": [
+        "skills/context-memory/SKILL.md",
+        "skills/context-memory/references/context-precedence.md"
+      ],
+      "answer_contains": [
+        "stale"
+      ],
+      "repository": "memory-optimization"
+    },
+    {
+      "id": "server-commands",
+      "question": "how do I start the self-hosted stack",
+      "relevant": [
+        "server/AGENTS.md",
+        "server/README.md"
+      ],
+      "answer_contains": [
+        "docker compose"
+      ],
+      "repository": "memory-optimization"
+    },
+    {
+      "id": "embedding-dims",
+      "question": "why does the pgvector column width have to match the embedder output",
+      "relevant": [
+        "mem0:server.embedding_dims",
+        "server/.env.example",
+        "server/main.py"
+      ],
+      "answer_contains": [
+        "768",
+        "1536"
+      ],
+      "repository": "memory-optimization"
+    },
+    {
+      "id": "init-db-crlf",
+      "question": "why did postgres report healthy while the api said database mem0_app does not exist",
+      "relevant": [
+        "mem0:server.init_db_line_endings",
+        ".gitattributes"
+      ],
+      "answer_contains": [
+        "CRLF"
+      ],
+      "repository": "memory-optimization"
+    }
+  ]
+}
