@@ -3,150 +3,183 @@ name: context-memory
 description: >
   Select what goes into an agent's context from four layers - instructions,
   repository truth, current task state, and long-term Mem0 memory - then rank,
-  deduplicate, resolve conflicts and budget it.
-  TRIGGER when: deciding what context to give an agent or subagent for a task;
-  storing a decision, discovery, lesson or failure for later; asking what is
-  already remembered about a repository or topic; promoting or retiring a
-  memory; investigating why a retrieved memory disagrees with the code.
-  DO NOT TRIGGER when: the question is answerable by reading one known file;
-  the user wants the Mem0 SDK itself (use the `mem0` skill); the task is about
-  running or operating the Mem0 server rather than using it as a context source.
+  deduplicate, resolve conflicts and budget it. Also stores and retrieves
+  durable engineering memory across sessions and repositories.
+  TRIGGER when: starting work in a repo and wanting to know what is already
+  known about it; deciding what context to give an agent or subagent; storing a
+  decision, discovery, lesson or failure worth keeping; asking what was learned
+  before about a topic; promoting or retiring a memory; investigating why a
+  retrieved memory disagrees with the code.
+  DO NOT TRIGGER when: the question is answerable by reading one known file; the
+  user wants the Mem0 SDK itself (use the `mem0` skill); the task is operating
+  the Mem0 server rather than using it as a context source.
 ---
 
 # Context Memory
 
 Mem0 is the long-term memory layer. It is **not** the context-management
 solution. This skill is the layer above it, and its job is **selection**, not
-accumulation: the goal is the smallest context that answers the task, not the
-largest one that fits.
+accumulation: the smallest context that answers the task, not the largest that
+fits.
 
-## The four layers, and what each is for
+## The one command
 
-| Layer | Answers | Examples |
+Everything runs through one launcher, from any repository:
+
+```powershell
+$ctx = "$env:USERPROFILE\.claude\skills\context-memory\scripts\ctx.ps1"
+& $ctx health
+```
+
+It resolves the checkout, reads the API port, key and identity from
+`server/.env`, and derives the repository scope key from the git remote. You
+never pass connection details.
+
+If `health` shows `API: down`, start the stack first — the command it prints.
+
+## Scope rules — the part to get right
+
+**Reading is automatic: this repository AND the shared scope, every time.**
+A lesson worth remembering everywhere is useless if it only surfaces where it
+was learned, so `search` queries both and labels each result set.
+
+**Writing is never guessed. ASK THE USER which scope before storing.**
+
+| Choose | When | Example |
 |---|---|---|
-| Instructions | what the agent MUST or MUST NOT do | `CLAUDE.md`, `AGENTS.md`, `.claude/rules/*.md`, `SKILL.md` |
-| Current state | what is happening right now | branch, working tree, diff, recent commits, test output |
-| Repository | what the repo currently is | `README.md`, `docs/`, manifests, the source itself |
-| Memory | what experience says | decisions, discoveries, debugging lessons, past failures |
+| `-Scope repo` | The fact is about *this codebase* | "server/AGENTS.md documents a Neo4j service that docker-compose.yaml does not define" |
+| `-Scope shared` | The fact holds anywhere | "FastAPI silently ignores query parameters not in the endpoint signature" |
+
+Getting this wrong is not loud. A repository fact written to the shared scope
+surfaces on unrelated projects as if it were universal truth, and nothing about
+the write looks wrong at the time. `store` refuses to run without an explicit
+`-Scope` for exactly that reason — do not paper over it by always picking one.
+
+When in doubt, ask: *"Is this true of this repo, or true everywhere?"*
+
+## Operations
+
+### Check the connection
+
+```powershell
+& $ctx health
+```
+
+Prints the checkout, API status and URL, the repository scope key it derived,
+and the identity. Check this first whenever a search comes back empty.
+
+### Build a context for a task
+
+```powershell
+& $ctx build -Task "add a graph store to the self-hosted stack" -ReportOnly
+& $ctx build -Task "why does the pgvector column width matter" -Files server/main.py
+```
+
+`-ReportOnly` shows the accounting without the context. Add `-Json` to pipe it,
+`-MaxTokens` to change the budget, `-NoMemory` to use static layers only.
+
+The report always prints denominators, e.g. `42 of 492 candidates injected
+(42 duplicate, 408 over budget)`. Read them: a thin context is explained there.
+
+### Search what is already known
+
+```powershell
+& $ctx search -Query "embedding dimensions pgvector"
+& $ctx search -Query "line endings" -TopK 3
+```
+
+Always searches this repo **and** shared. If both come back empty it says so and
+names the two things that silently cause it — a wrong identity or a wrong repo
+key — because an empty result and a wrong lookup look identical.
+
+**Read the score.** Similarity search always returns nearest neighbours, so a
+query matching nothing still comes back with rows: measured, a nonsense query
+scored 0.50–0.55 against real memories scoring 0.65–0.78. A result is not
+evidence of a match; its score is. Pass `-Threshold 0.6` to impose a floor, but
+pick the number from your own data rather than inheriting one.
+
+### Store a memory
+
+```powershell
+# about this codebase
+& $ctx store -Scope repo -Kind discovery -Topic server.graph_store `
+  -Text "server/AGENTS.md documents Neo4j on ports 8474/8687 but docker-compose.yaml defines no such service."
+
+# true anywhere
+& $ctx store -Scope shared -Kind lesson -Topic tooling.fastapi_query_params `
+  -Text "FastAPI silently ignores query parameters not in the endpoint signature, so an unsupported filter looks like it works and does nothing."
+```
+
+`-Kind`: `decision`, `discovery`, `lesson`, `convention`, `failure`, `incident`,
+`note`.
+
+`-Topic` is the stable key conflict detection uses. **Supply it whenever the
+memory claims something the repository could later contradict** — a memory
+without a topic cannot be checked, and the build report counts it as
+`unchecked` rather than as agreement.
+
+Optional: `-Tag`, `-Confidence`, `-Importance` (0..1).
+
+### Harvest memories from recent work
+
+```powershell
+& $ctx extract -Since HEAD~5           # review only, writes nothing
+& $ctx extract -Since HEAD~5 -Store    # write the survivors as candidates
+```
+
+Ordinary commits are deliberately **not** extracted — they are already in git,
+and the repository layer reads git live. Only a breaking change, or a fix that
+states its cause, becomes a candidate.
+
+Nothing is written without `-Store`, and even then everything lands at
+`candidate`. That gap is the review gate; do not collapse it.
+
+### Promote or retire a memory
+
+```powershell
+& $ctx promote -Id <memory id> -To durable
+& $ctx promote -Id <memory id> -To stale
+& $ctx promote -Id <old id> -To superseded -Replacement <new id>
+```
+
+Lifecycle is `candidate → durable → stale → superseded`, enforced by a
+transition table: illegal moves raise before anything is written. `superseded`
+is terminal and always needs a pointer to what replaced it.
+
+### Benchmark the selection itself
+
+```powershell
+& $ctx eval
+```
+
+Seeds known memories, runs five arms, prints a methodology block. Retrieval-only
+— it measures what gets selected, not whether an agent answers correctly.
 
 ## Non-negotiables
 
-1. **Instructions are policy, not memory.** Instruction files **on the task's own
-   path** are pinned and never trimmed by the budget; if that policy does not
-   fit, the build raises rather than silently cutting a rule. Instruction files
-   found elsewhere in the tree are ranked candidates, not policy — in a polyglot
-   monorepo `cli/node/AGENTS.md` is not policy for a server task, and pinning
-   every one of them put 13,373 tokens of unskippable "policy" against an 8,000
-   token budget.
+1. **Instructions are policy, not memory.** Instruction files on the task's own
+   path are pinned and never trimmed; if that policy does not fit, the build
+   raises rather than silently cutting a rule. Instruction files elsewhere in
+   the tree are ranked candidates, not policy — in a monorepo
+   `cli/node/AGENTS.md` is not policy for a server task.
 2. **Historical memory must never silently override current repository truth.**
    Precedence is instructions → current state → repository → memory. A memory
-   that loses is marked stale and still shown, annotated with what overruled it -
-   never deleted, never injected as if it agreed.
-3. **Do not copy `CLAUDE.md` into Mem0.** The split: if forgetting it would make
-   the agent break a rule, it stays in `CLAUDE.md`; if forgetting it would only
-   make the agent less informed, it is a Mem0 candidate. See
+   that loses is marked stale and still shown, annotated with what overruled it.
+3. **Do not copy `CLAUDE.md` into Mem0.** If forgetting it would make the agent
+   break a rule, it stays in `CLAUDE.md`; if forgetting it would only make the
+   agent less informed, it is a Mem0 candidate. See
    [memory-policy.md](references/memory-policy.md).
 4. **Do not store every observation.** Memories enter as `candidate`. Promotion
-   to `durable` is deliberate.
-5. **Never report a retrieval number without its denominator.** "24 of 87
-   injected" is the honest form; "24 injected" hides the 63 that were dropped.
-6. **Conflict detection has a named blind spot.** A memory contradicting the repo
-   while sharing no `topic` key is not detected. The build report counts those as
-   `unchecked`. Read the count; do not assume zero conflicts means agreement.
-   See [context-precedence.md](references/context-precedence.md).
-
-## Scopes
-
-`global`, `user`, `project`, `repository`, `branch`, `session`, `task` — broad to
-narrow. Queries run narrow first, so the most specific memory is seen first.
-**Never store repository-specific facts at `global` scope.**
-
-## Building a context
-
-```bash
-python -m src.scripts.context_build \
-  --task "add graph memory to the self-hosted stack" \
-  --files server/docker-compose.yaml \
-  --repository memory-optimization \
-  --max-tokens 8000
-```
-
-Add `--report-only` to see the accounting without the context itself, and
-`--json` for machine use. It runs without a Mem0 server; the report then shows
-the memory layer absent rather than pretending it was empty.
-
-## Storing a memory
-
-```bash
-python -m src.scripts.memory_store \
-  --scope repository --key memory-optimization \
-  --kind discovery --topic server.default_provider \
-  --text "The self-hosted compose stack ships pgvector only; there is no Neo4j service."
-```
-
-`--kind` is one of `decision`, `discovery`, `lesson`, `convention`, `failure`,
-`incident`, `note`. `--topic` is the stable key conflict detection uses — supply
-it whenever the memory makes a claim that the repository could later contradict.
-
-## Extracting memories from a session
-
-```bash
-# review only - writes nothing
-python -m src.scripts.memory_extract --repository memory-optimization --since HEAD~5
-
-# store the survivors, all at lifecycle=candidate
-python -m src.scripts.memory_extract --repository memory-optimization --since HEAD~5 --store
-```
-
-Also takes `--decision`, `--tool-error` and `--test-failure` (each repeatable)
-for things git does not record. Ordinary commits are deliberately **not**
-extracted: they are already in git, and the repository layer reads them live.
-Only a breaking change or a fix that states its cause becomes a candidate.
-
-Nothing is written without `--store`, and even then everything lands at
-`candidate`. That gap is the review gate — do not collapse it.
-
-## Evaluating
-
-```bash
-python -m src.scripts.context_eval --seed          # seed memories, then run
-python -m src.scripts.context_eval --no-memory     # static layers only
-```
-
-Compares five arms: `full`, `static-docs-only`, `memory-only`,
-`static+memory`, `static+memory+state`. **Retrieval-only** — it measures what
-gets selected, not whether an agent answers correctly, and the report says so
-every run. `full` is the control: if the full manager does not beat it on tokens
-at comparable recall, the selection layer is not earning its place.
-
-The shipped dataset is eight questions about this one repository. That is not
-LongMemEval and cannot support a general claim — see
-[evaluation.md](references/evaluation.md).
-
-## Searching and lifecycle
-
-```bash
-python -m src.scripts.memory_search --scope repository --key memory-optimization --query "embedding provider"
-python -m src.scripts.memory_promote --id <id> --to durable
-python -m src.scripts.memory_promote --id <id> --to superseded --replacement <new id>
-```
-
-Lifecycle is `candidate → durable → stale → superseded`, and the transition
-table is enforced: illegal moves raise before anything is written. `superseded`
-is terminal and always requires a pointer to the replacement.
-
-## Environment
-
-```
-MEM0_API_URL     http://localhost:8888   # port comes from MEM0_API_PORT in server/.env
-MEM0_API_KEY     ADMIN_API_KEY from server/.env
-MEM0_USER        who the memory belongs to
-MEM0_REPOSITORY  optional repository scope key
-```
+   is deliberate.
+5. **Never report a retrieval number without its denominator.**
+6. **Conflict detection has a named blind spot.** A memory contradicting the
+   repo while sharing no `topic` is not detected; the report counts those as
+   `unchecked`. Zero conflicts is not the same as agreement. See
+   [context-precedence.md](references/context-precedence.md).
 
 ## References
 
-- [memory-policy.md](references/memory-policy.md) — what belongs in Mem0 vs `CLAUDE.md`, the promotion model, scopes
-- [retrieval-policy.md](references/retrieval-policy.md) — the scoring signals and why the weights are still unmeasured
-- [context-precedence.md](references/context-precedence.md) — the ladder, conflict rules, and their blind spot
+- [memory-policy.md](references/memory-policy.md) — what belongs in Mem0 vs `CLAUDE.md`, promotion, scopes
+- [retrieval-policy.md](references/retrieval-policy.md) — scoring signals, and why the weights are unmeasured
+- [context-precedence.md](references/context-precedence.md) — the ladder, conflict rules, the blind spot
 - [evaluation.md](references/evaluation.md) — metrics, and why retrieval quality is not answer quality

@@ -172,14 +172,34 @@ class Mem0Provider(MemoryProvider):
             )
         return [self._to_record(row) for row in rows]
 
-    def search(self, query: SearchQuery) -> list[MemoryRecord]:
-        filters = scope_identifiers(
-            query.scope,
-            key=query.scope_key,
-            user=self._user,
-            repository=query.repository or self._repository,
-            project=query.project or self._project,
+    def _scope_filters(self, scope: Scope, scope_key: str) -> dict[str, Any]:
+        """Identifier triple PLUS the scope metadata.
+
+        The triple alone does not isolate every scope: `scope_identifiers` emits
+        only `user_id` for GLOBAL, so a global search filtered by user and
+        returned every repository-scoped memory that user had ever written.
+        Measured: a shared-scope query came back with all 5 memories belonging to
+        one repository, and the leak was indistinguishable from a relevant hit.
+
+        `scope` and `scope_key` are written into metadata on every add, and Mem0
+        surfaces metadata as payload keys, so filtering on them isolates the
+        scope properly.
+        """
+        filters: dict[str, Any] = dict(
+            scope_identifiers(
+                scope,
+                key=scope_key,
+                user=self._user,
+                repository=self._repository,
+                project=self._project,
+            )
         )
+        filters["scope"] = scope.value
+        filters["scope_key"] = scope_key
+        return filters
+
+    def search(self, query: SearchQuery) -> list[MemoryRecord]:
+        filters = self._scope_filters(query.scope, query.scope_key)
         body: dict[str, Any] = {"query": query.query, "filters": filters, "top_k": query.top_k}
         if query.threshold is not None:
             body["threshold"] = query.threshold
@@ -194,16 +214,28 @@ class Mem0Provider(MemoryProvider):
     def get_all(self, *, scope: Scope, scope_key: str, top_k: int = 100) -> MemoryPage:
         if not scope_key:
             raise ValueError("scope_key is required")
-        params = dict(self._identifiers(scope, scope_key))
+        # GET /memories takes only user_id/agent_id/run_id/top_k (server/main.py).
+        # FastAPI silently ignores any other query parameter, so sending scope
+        # here would look like a filter and do nothing - verified against the
+        # live server: `?scope=NONSENSE` still returned all 5 repository
+        # memories. The scope filter therefore has to be applied client-side.
+        params = {k: str(v) for k, v in self._identifiers(scope, scope_key).items()}
         params["top_k"] = str(top_k)
         payload = self._request("GET", "/memories", params=params) or {}
         rows = payload.get("results") or []
-        records = tuple(self._to_record(row) for row in rows)
+        # `truncated` reflects the SERVER page, not the filtered result: the rows
+        # dropped here were real, and more may exist beyond the page boundary.
+        server_page_full = len(rows) >= top_k
+        records = tuple(
+            record
+            for record in (self._to_record(row) for row in rows)
+            if record.envelope.scope is scope and record.envelope.scope_key == scope_key
+        )
         return MemoryPage(
             records=records,
             limit=top_k,
             returned=len(records),
-            truncated=len(records) >= top_k,
+            truncated=server_page_full,
         )
 
     def update(

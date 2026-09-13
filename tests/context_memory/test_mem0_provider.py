@@ -118,7 +118,15 @@ def test_search_does_not_send_the_deprecated_top_level_identifiers():
 
 def test_get_all_reports_the_denominator_and_whether_it_truncated():
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"results": [{"id": f"m{i}", "memory": "x"} for i in range(3)]})
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {"id": f"m{i}", "memory": "x", "metadata": {"scope": "global", "scope_key": "eng"}}
+                    for i in range(3)
+                ]
+            },
+        )
 
     page = make_provider(handler).get_all(scope=Scope.GLOBAL, scope_key="eng", top_k=3)
     assert page.returned == 3
@@ -128,7 +136,10 @@ def test_get_all_reports_the_denominator_and_whether_it_truncated():
 
 def test_get_all_is_not_marked_truncated_when_it_came_back_short():
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"results": [{"id": "m0", "memory": "x"}]})
+        return httpx.Response(
+            200,
+            json={"results": [{"id": "m0", "memory": "x", "metadata": {"scope": "global", "scope_key": "eng"}}]},
+        )
 
     page = make_provider(handler).get_all(scope=Scope.GLOBAL, scope_key="eng", top_k=10)
     assert page.truncated is False
@@ -195,3 +206,75 @@ def test_supersede_requires_the_replacement_id():
 
     with pytest.raises(ValueError, match="superseded_by"):
         make_provider(handler).supersede("m1", replacement_id="")
+
+
+def test_search_filters_on_scope_metadata_not_just_the_identifier_triple():
+    # Measured defect: scope_identifiers(GLOBAL, ...) emits only user_id, so a
+    # global search filtered by user alone and returned every repository-scoped
+    # memory that user had ever written. The shared scope was not isolated at
+    # all, and the leak looked exactly like a relevant result.
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"results": []})
+
+    make_provider(handler).search(SearchQuery(query="q", scope=Scope.GLOBAL, scope_key="global"))
+    assert seen["body"]["filters"]["scope"] == "global"
+    assert seen["body"]["filters"]["scope_key"] == "global"
+
+
+def test_a_repository_search_is_scoped_to_that_repository_key():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"results": []})
+
+    make_provider(handler).search(
+        SearchQuery(query="q", scope=Scope.REPOSITORY, scope_key="memory-optimization")
+    )
+    assert seen["body"]["filters"]["scope"] == "repository"
+    assert seen["body"]["filters"]["scope_key"] == "memory-optimization"
+
+
+def test_get_all_drops_rows_from_other_scopes():
+    # GET /memories accepts only the identifier triple and top_k; FastAPI ignores
+    # any other query parameter. Verified against the live server: `?scope=NONSENSE`
+    # still returned all 5 repository memories. So asserting what we SEND would
+    # pass while the scope filter did nothing - this asserts what comes back.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {"id": "g1", "memory": "global fact", "metadata": {"scope": "global", "scope_key": "global"}},
+                    {"id": "r1", "memory": "repo fact",
+                     "metadata": {"scope": "repository", "scope_key": "memory-optimization"}},
+                ]
+            },
+        )
+
+    page = make_provider(handler).get_all(scope=Scope.GLOBAL, scope_key="global", top_k=10)
+    assert [r.id for r in page.records] == ["g1"]
+    assert page.returned == 1
+
+
+def test_get_all_truncation_reflects_the_server_page_not_the_filtered_count():
+    # Rows dropped by the client-side scope filter were still real rows, so a
+    # full server page means more may exist even when few survive filtering.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {"id": f"r{i}", "memory": "x",
+                     "metadata": {"scope": "repository", "scope_key": "other"}}
+                    for i in range(3)
+                ]
+            },
+        )
+
+    page = make_provider(handler).get_all(scope=Scope.GLOBAL, scope_key="global", top_k=3)
+    assert page.returned == 0
+    assert page.truncated is True
