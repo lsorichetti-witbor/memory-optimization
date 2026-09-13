@@ -53,7 +53,7 @@ that is plainly about a tool rather than this codebase.
 
 | Scope | When | Example |
 |---|---|---|
-| default (`repository`) | anything about *this codebase* | "server/AGENTS.md documents a Neo4j service that docker-compose.yaml does not define" |
+| default (`repo`) | anything about *this codebase* | "server/AGENTS.md documents a Neo4j service that docker-compose.yaml does not define" |
 | `-Scope global` | the user asked for it, or it plainly holds anywhere | "FastAPI silently ignores query parameters not in the endpoint signature" |
 
 The two mistakes are not symmetric, which is why the default is what it is:

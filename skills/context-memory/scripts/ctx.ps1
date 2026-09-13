@@ -46,8 +46,8 @@ param(
     # mistakes are not symmetric: a general lesson stuck in one repo is merely
     # missed elsewhere, while a repo-specific fact written to `global` surfaces
     # on unrelated projects as universal truth.
-    [ValidateSet('repository', 'global')]
-    [string]$Scope = 'repository',
+    [ValidateSet('repo', 'global')]
+    [string]$Scope = 'repo',
 
     [ValidateSet('decision', 'discovery', 'lesson', 'convention', 'failure', 'incident', 'note')]
     [string]$Kind = 'note',
@@ -231,8 +231,10 @@ try {
         }
         'store' {
             if (-not $Text) { Write-Error "store needs -Text '<the memory>'" }
-            $scopeName = if ($Scope -eq 'repository') { 'repository' } else { 'global' }
-            $scopeKey = if ($Scope -eq 'repository') { $RepoKey } else { 'global' }
+            # `repo` on the command line, `repository` in the data. The short
+            # form is what you type; the scope vocabulary is what gets stored.
+            $scopeName = if ($Scope -eq 'repo') { 'repository' } else { 'global' }
+            $scopeKey = if ($Scope -eq 'repo') { $RepoKey } else { 'global' }
             if ($Scope -eq 'global') {
                 # The opt-in direction is the one worth announcing: this memory
                 # will surface on every repository, not just this one.
