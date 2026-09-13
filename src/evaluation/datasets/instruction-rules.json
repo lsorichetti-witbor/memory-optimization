@@ -1,0 +1,356 @@
+{
+  "name": "global-instruction-rules",
+  "description": "Every invariant in the global instruction set, paired with a task that should surface it. The markers are written out by hand rather than generated from the file: deriving them from the text under test would make every case pass by construction and could not catch the rule being dropped. Markers are the terms that MUST survive any rewording, not whole sentences.",
+  "cases": [
+    {
+      "id": "caveman",
+      "task": "answer a question about this codebase",
+      "invariant": "Respond in caveman mode",
+      "must_match": [
+        "caveman"
+      ]
+    },
+    {
+      "id": "pnpm",
+      "task": "install the node dependencies for this package",
+      "invariant": "pnpm install, never npm install",
+      "must_match": [
+        "pnpm install",
+        "npm install"
+      ]
+    },
+    {
+      "id": "npm-others",
+      "task": "run the node test script",
+      "invariant": "Other npm commands stay npm",
+      "must_match": [
+        "npm run",
+        "npm test"
+      ]
+    },
+    {
+      "id": "subagent-model",
+      "task": "dispatch implementation subagents from a plan",
+      "invariant": "Implementation subagents run on sonnet",
+      "must_match": [
+        "sonnet"
+      ]
+    },
+    {
+      "id": "verify-number",
+      "task": "report how many records were processed",
+      "invariant": "Verify a number before offering it as evidence",
+      "must_match": [
+        "verify a number",
+        "evidence"
+      ]
+    },
+    {
+      "id": "trust-subagent",
+      "task": "relay what a subagent reported back to the user",
+      "invariant": "Never relay a subagent or tool claim as fact",
+      "must_match": [
+        "subagent",
+        "established fact"
+      ]
+    },
+    {
+      "id": "revision-scope",
+      "task": "say the tests pass and the output matches the spec",
+      "invariant": "A verification result is scoped to its revision",
+      "must_match": [
+        "scoped to the revision"
+      ]
+    },
+    {
+      "id": "aggregate-layer",
+      "task": "report a total that came out of a join and a dedup",
+      "invariant": "Check an aggregate at the layer that produced it",
+      "must_match": [
+        "aggregate",
+        "layer that produced it"
+      ]
+    },
+    {
+      "id": "short-id",
+      "task": "print a table of file hashes truncated for display",
+      "invariant": "A shortened identifier must still identify one thing",
+      "must_match": [
+        "shortened identifier",
+        "resolve"
+      ]
+    },
+    {
+      "id": "discrepancy",
+      "task": "explain why two counts differ by a few rows",
+      "invariant": "A plausible explanation is not a verified one",
+      "must_match": [
+        "plausible explanation",
+        "verified"
+      ]
+    },
+    {
+      "id": "silent-direction",
+      "task": "write a linter that reports whether the code has a problem",
+      "invariant": "Audit the path that answers no",
+      "must_match": [
+        "is there a problem",
+        "silent direction"
+      ]
+    },
+    {
+      "id": "exit-zero",
+      "task": "check whether the build command succeeded",
+      "invariant": "Exit status 0 is not evidence of success",
+      "must_match": [
+        "exit status 0",
+        "empty"
+      ]
+    },
+    {
+      "id": "acceptable-limit",
+      "task": "document a known limitation of this checker",
+      "invariant": "An acceptable limitation needs its failure direction named",
+      "must_match": [
+        "acceptable limitation",
+        "failure direction"
+      ]
+    },
+    {
+      "id": "valid-subset",
+      "task": "count only the rows that joined successfully",
+      "invariant": "A filter to the valid subset discards real contributions",
+      "must_match": [
+        "filter",
+        "undercount"
+      ]
+    },
+    {
+      "id": "truncated-output",
+      "task": "print the top 10 record types by deployment count",
+      "invariant": "Output that truncates must state what it cut",
+      "must_match": [
+        "truncates",
+        "denominator"
+      ]
+    },
+    {
+      "id": "inherited-target",
+      "task": "tune the threshold until it hits the published number",
+      "invariant": "A target from a different measurement basis is not a target",
+      "must_match": [
+        "measurement basis",
+        "target"
+      ]
+    },
+    {
+      "id": "measure-env",
+      "task": "write a plan containing exact commands for a CLI I have not run",
+      "invariant": "Measure the environment before writing exact code",
+      "must_match": [
+        "measure the environment",
+        "plan"
+      ]
+    },
+    {
+      "id": "env-override",
+      "task": "pass a working directory to a git subprocess",
+      "invariant": "Env vars silently override explicit arguments",
+      "must_match": [
+        "silently overridden by the environment",
+        "scrub"
+      ]
+    },
+    {
+      "id": "machine-readable",
+      "task": "parse the output of git status in a script",
+      "invariant": "Parse machine-readable output, not human lines",
+      "must_match": [
+        "machine-readable",
+        "NUL-delimited"
+      ]
+    },
+    {
+      "id": "reader-shell",
+      "task": "give the user a command to run in their terminal",
+      "invariant": "Commands must work in the reader's actual shell",
+      "must_match": [
+        "shell",
+        "PowerShell"
+      ]
+    },
+    {
+      "id": "cardinality",
+      "task": "key a lookup table on a pipe-delimited column",
+      "invariant": "Establish cardinality before a field becomes a key",
+      "must_match": [
+        "holds one value or a set",
+        "split on ingest"
+      ]
+    },
+    {
+      "id": "fan-in",
+      "task": "report len() of a relation as a count of deletions",
+      "invariant": "Check fan-in before printing len() as a count",
+      "must_match": [
+        "fan-in",
+        "count"
+      ]
+    },
+    {
+      "id": "single-element",
+      "task": "take one element out of a set to use as the answer",
+      "invariant": "Taking one element asserts the set holds one",
+      "must_match": [
+        "next(iter",
+        "multiplicity"
+      ]
+    },
+    {
+      "id": "sweep-class",
+      "task": "fix the multi-value bug in this one field",
+      "invariant": "Sweep for the whole class before fixing one instance",
+      "must_match": [
+        "whole class",
+        "sweep"
+      ]
+    },
+    {
+      "id": "test-independent",
+      "task": "write a test for the list of supported providers",
+      "invariant": "A test must not derive expectations from the implementation",
+      "must_match": [
+        "derive its expectations",
+        "spell the expected values"
+      ]
+    },
+    {
+      "id": "predicate-name",
+      "task": "name a function that returns a reason string",
+      "invariant": "A predicate's name must match what it returns",
+      "must_match": [
+        "predicate",
+        "returns"
+      ]
+    },
+    {
+      "id": "red-first",
+      "task": "add a regression test for the bug I just fixed",
+      "invariant": "Watch a new regression test fail against old behaviour",
+      "must_match": [
+        "old behaviour",
+        "fail"
+      ]
+    },
+    {
+      "id": "fixture-drift",
+      "task": "add a synthetic fixture that guards against this defect",
+      "invariant": "A fixture must assert it still reproduces the defect",
+      "must_match": [
+        "fixture",
+        "reproduces"
+      ]
+    },
+    {
+      "id": "assert-outcome",
+      "task": "assert which layer of the pipeline removed the row",
+      "invariant": "Assert the outcome, not the mechanism",
+      "must_match": [
+        "assert the outcome",
+        "mechanism"
+      ]
+    },
+    {
+      "id": "live-subagent",
+      "task": "edit a file while a subagent is working on it",
+      "invariant": "Never edit a file a live subagent is working on",
+      "must_match": [
+        "live subagent"
+      ]
+    },
+    {
+      "id": "file-tools",
+      "task": "change file content with a sed script",
+      "invariant": "Use the file-editing tools, not shell substitution",
+      "must_match": [
+        "file-editing tools",
+        "fails silently"
+      ]
+    },
+    {
+      "id": "artifact-unit",
+      "task": "revert one of two generated files to an older version",
+      "invariant": "Generated artifacts are a unit; regenerate the set",
+      "must_match": [
+        "regenerate the whole set"
+      ]
+    },
+    {
+      "id": "untracked-source",
+      "task": "commit a generated report whose source is not in git",
+      "invariant": "Do not version-control a rendering whose source is untracked",
+      "must_match": [
+        "version-control a rendering",
+        "untracked"
+      ]
+    },
+    {
+      "id": "diff-compliance",
+      "task": "check the implementation matches the plan's code blocks",
+      "invariant": "Verify plan compliance by diff, not by review",
+      "must_match": [
+        "by diff",
+        "review"
+      ]
+    },
+    {
+      "id": "two-checkers",
+      "task": "one checker passes and another fails on the same code",
+      "invariant": "Two checkers that disagree may both be right",
+      "must_match": [
+        "same revision"
+      ]
+    },
+    {
+      "id": "batch-findings",
+      "task": "apply the code review findings one at a time",
+      "invariant": "Batch review findings into one fix round",
+      "must_match": [
+        "batch",
+        "one fix round"
+      ]
+    },
+    {
+      "id": "memory-scope",
+      "task": "remember that this project pins node 20",
+      "invariant": "Ask repo vs shared before storing a memory",
+      "must_match": [
+        "ask which scope"
+      ]
+    },
+    {
+      "id": "netsuite-rules",
+      "task": "write a NetSuite suitelet script",
+      "invariant": "Apply the NetSuite best-practice references",
+      "must_match": [
+        "netsuite"
+      ]
+    },
+    {
+      "id": "graphify",
+      "task": "run graphify on this repository",
+      "invariant": "Use the installed graphify skill",
+      "must_match": [
+        "graphify"
+      ]
+    },
+    {
+      "id": "memory-stack-up",
+      "task": "the memory server is not responding, start it",
+      "invariant": "How to start the self-hosted stack",
+      "must_match": [
+        "stack.ps1"
+      ]
+    }
+  ]
+}
