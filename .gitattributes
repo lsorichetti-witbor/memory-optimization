@@ -1,0 +1,8 @@
+# Shell scripts must keep LF endings even on a Windows checkout with
+# core.autocrlf=true. A CRLF shebang makes the kernel look for an interpreter
+# named "/bin/bash\r", and the container reports it as
+# "cannot execute: required file not found" - which looks like a missing file,
+# not a line-ending problem. The failure is silent at the layer that matters:
+# postgres still reports healthy, and the only symptom is the API failing later
+# with "database mem0_app does not exist".
+*.sh text eol=lf

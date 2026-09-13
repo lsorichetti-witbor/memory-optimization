@@ -113,9 +113,37 @@ POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "postgres")
 POSTGRES_COLLECTION_NAME = os.environ.get("POSTGRES_COLLECTION_NAME", "memories")
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 HISTORY_DB_PATH = os.environ.get("HISTORY_DB_PATH", "/app/history/history.db")
+DEFAULT_LLM_PROVIDER = os.environ.get("MEM0_DEFAULT_LLM_PROVIDER", "openai")
+DEFAULT_EMBEDDER_PROVIDER = os.environ.get("MEM0_DEFAULT_EMBEDDER_PROVIDER", "openai")
 DEFAULT_LLM_MODEL = os.environ.get("MEM0_DEFAULT_LLM_MODEL", "gpt-5-mini")
 DEFAULT_EMBEDDER_MODEL = os.environ.get("MEM0_DEFAULT_EMBEDDER_MODEL", "text-embedding-3-small")
+# The pgvector column is created with this width. It MUST match what the embedder
+# emits: text-embedding-3-small is 1536, gemini-embedding-001 defaults to 768.
+# A mismatch fails at insert time, after the table already exists.
+DEFAULT_EMBEDDING_DIMS = int(os.environ.get("MEM0_EMBEDDING_DIMS", "1536"))
+
+_PROVIDER_KEYS = {
+    "openai": OPENAI_API_KEY,
+    "anthropic": ANTHROPIC_API_KEY,
+    "gemini": GOOGLE_API_KEY,
+}
+
+
+def _provider_api_key(provider: str) -> Optional[str]:
+    """Resolve the API key for a bundled provider.
+
+    An unknown provider name would otherwise build a config with no api_key and
+    fail later as an opaque upstream 500 on the first request. Fail at boot instead.
+    """
+    if provider not in _PROVIDER_KEYS:
+        raise RuntimeError(
+            f"Unknown provider '{provider}'. Bundled: {', '.join(sorted(_PROVIDER_KEYS))}. "
+            "Set MEM0_DEFAULT_LLM_PROVIDER / MEM0_DEFAULT_EMBEDDER_PROVIDER to a bundled provider."
+        )
+    return _PROVIDER_KEYS[provider]
 
 DEFAULT_CONFIG = {
     "version": "v1.1",
@@ -128,13 +156,25 @@ DEFAULT_CONFIG = {
             "user": POSTGRES_USER,
             "password": POSTGRES_PASSWORD,
             "collection_name": POSTGRES_COLLECTION_NAME,
+            "embedding_model_dims": DEFAULT_EMBEDDING_DIMS,
         },
     },
     "llm": {
-        "provider": "openai",
-        "config": {"api_key": OPENAI_API_KEY, "temperature": 0.2, "model": DEFAULT_LLM_MODEL},
+        "provider": DEFAULT_LLM_PROVIDER,
+        "config": {
+            "api_key": _provider_api_key(DEFAULT_LLM_PROVIDER),
+            "temperature": 0.2,
+            "model": DEFAULT_LLM_MODEL,
+        },
     },
-    "embedder": {"provider": "openai", "config": {"api_key": OPENAI_API_KEY, "model": DEFAULT_EMBEDDER_MODEL}},
+    "embedder": {
+        "provider": DEFAULT_EMBEDDER_PROVIDER,
+        "config": {
+            "api_key": _provider_api_key(DEFAULT_EMBEDDER_PROVIDER),
+            "model": DEFAULT_EMBEDDER_MODEL,
+            "embedding_dims": DEFAULT_EMBEDDING_DIMS,
+        },
+    },
     "history_db_path": HISTORY_DB_PATH,
 }
 

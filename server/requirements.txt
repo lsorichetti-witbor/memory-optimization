@@ -10,6 +10,10 @@ psycopg-pool>=3.2.6,<4.0.0
 # here, rebuilding the image, and updating BUNDLED_*_PROVIDERS in main.py.
 anthropic>=0.39,<1.0
 google-generativeai>=0.8,<1.0
+# mem0/llms/gemini.py and mem0/embeddings/gemini.py import `from google import genai`,
+# which lives in google-genai, not google-generativeai. Without it the gemini
+# provider raises ImportError on the first request.
+google-genai>=1.0.0
 
 # Auth & database (Phase 1)
 sqlalchemy>=2.0,<3.0

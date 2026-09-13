@@ -2,6 +2,16 @@ FROM python:3.12
 
 WORKDIR /app
 
+# Local TLS-interception roots (corporate proxy or antivirus that re-signs HTTPS).
+# server/certs/ ships empty, so this is a no-op on a normal network. When a .crt
+# is present, pip/curl would otherwise fail with CERTIFICATE_VERIFY_FAILED and no
+# hint as to why. See server/certs/README.md.
+COPY server/certs/ /usr/local/share/ca-certificates/local/
+RUN update-ca-certificates
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    PIP_CERT=/etc/ssl/certs/ca-certificates.crt
+
 # Install Poetry
 RUN curl -sSL https://install.python-poetry.org | python3 -
 ENV PATH="/root/.local/bin:$PATH"
