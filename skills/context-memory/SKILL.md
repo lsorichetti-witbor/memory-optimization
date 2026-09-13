@@ -213,4 +213,5 @@ Seeds known memories, runs five arms, prints a methodology block. Retrieval-only
 - [context-precedence.md](references/context-precedence.md) — the ladder, conflict rules, the blind spot
 - [evaluation.md](references/evaluation.md) — metrics, and why retrieval quality is not answer quality
 - [PROMPT_EXAMPLES.md](../../PROMPT_EXAMPLES.md) — what to type, per operation, from any repo
-- [OFFLINE-SPOOL-TEST.md](../../docs/context-memory/OFFLINE-SPOOL-TEST.md) — the spool's design, test and limits
+- [DURABILITY.md](../../docs/context-memory/DURABILITY.md) — why a write is never lost, and both queues
+- [ARCHITECTURE.md](../../docs/context-memory/ARCHITECTURE.md) — the whole system, end to end
