@@ -69,7 +69,14 @@ say you did; do not reach for `global` to be safe, because it is the unsafe one.
 
 ## Operations
 
-### Check the connection
+Each one starts with what the person actually says. The trigger is the intent,
+not a command name - nobody types `/context-memory`, they ask a question. The
+launcher call underneath is the mechanism, not the interface.
+
+Many more phrasings, including the ones that should be refused:
+[references/prompts.md](references/prompts.md).
+
+### "Is the memory server up?" · "Which repo scope am I in?"
 
 ```powershell
 & $ctx health
@@ -78,7 +85,7 @@ say you did; do not reach for `global` to be safe, because it is the unsafe one.
 Prints the checkout, API status and URL, the repository scope key it derived,
 and the identity. Check this first whenever a search comes back empty.
 
-### Build a context for a task
+### "Build me a context for X" · "Pull together what matters before I refactor this"
 
 ```powershell
 & $ctx build -Task "add a graph store to the self-hosted stack" -ReportOnly
@@ -91,7 +98,7 @@ and the identity. Check this first whenever a search comes back empty.
 The report always prints denominators, e.g. `42 of 492 candidates injected
 (42 duplicate, 408 over budget)`. Read them: a thin context is explained there.
 
-### Search what is already known
+### "What do we already know about this repo?" · "Have we hit this before?" · "Why is the node version pinned here?"
 
 ```powershell
 & $ctx search -Query "embedding dimensions pgvector"
@@ -108,7 +115,13 @@ scored 0.50–0.55 against real memories scoring 0.65–0.78. A result is not
 evidence of a match; its score is. Pass `-Threshold 0.6` to impose a floor, but
 pick the number from your own data rather than inheriting one.
 
-### Store a memory
+### "Remember this: …" · "Note for this repo only …" · "Remember this everywhere: …"
+
+**Ask which scope before writing, unless the person already said.** "Remember
+this" alone does not say whether it is true of this repository or true
+everywhere, and the two mistakes are not symmetric - see the scope rules above.
+"Note for this repo only" and "Remember this everywhere" have already answered
+it; asking again is friction.
 
 ```powershell
 # this repository - the default, no -Scope needed
@@ -130,7 +143,7 @@ without a topic cannot be checked, and the build report counts it as
 
 Optional: `-Tag`, `-Confidence`, `-Importance` (0..1).
 
-### Harvest memories from recent work
+### "Look at the last few commits and tell me what is worth remembering"
 
 ```powershell
 & $ctx extract -Since HEAD~5           # review only, writes nothing
@@ -144,7 +157,7 @@ states its cause, becomes a candidate.
 Nothing is written without `-Store`, and even then everything lands at
 `candidate`. That gap is the review gate; do not collapse it.
 
-### When the server is down
+### "What is sitting in the memory queue?" · "Flush the queue" · "Replay whatever got queued"
 
 Storing while the stack is down does **not** fail and does **not** lose the
 memory. It queues to a spool shared by every repository, scope and user, warns
@@ -161,7 +174,7 @@ and nothing else will mention it.
 The queued time is preserved, so a memory replayed a week later does not rank as
 if it were written today. A failed replay keeps its file and exits non-zero.
 
-### Promote or retire a memory
+### "That one has proved right - promote it" · "Mark it stale, the code changed"
 
 ```powershell
 & $ctx promote -Id <memory id> -To durable
@@ -173,7 +186,7 @@ Lifecycle is `candidate → durable → stale → superseded`, enforced by a
 transition table: illegal moves raise before anything is written. `superseded`
 is terminal and always needs a pointer to what replaced it.
 
-### Benchmark the selection itself
+### "Is the selection actually earning its place?"
 
 ```powershell
 & $ctx eval
@@ -212,6 +225,6 @@ Seeds known memories, runs five arms, prints a methodology block. Retrieval-only
 - [retrieval-policy.md](references/retrieval-policy.md) — scoring signals, and why the weights are unmeasured
 - [context-precedence.md](references/context-precedence.md) — the ladder, conflict rules, the blind spot
 - [evaluation.md](references/evaluation.md) — metrics, and why retrieval quality is not answer quality
-- [PROMPT_EXAMPLES.md](../../PROMPT_EXAMPLES.md) — what to type, per operation, from any repo
+- [prompts.md](references/prompts.md) — what people actually say, per operation, and what should be refused
 - [DURABILITY.md](../../docs/context-memory/DURABILITY.md) — why a write is never lost, and both queues
 - [ARCHITECTURE.md](../../docs/context-memory/ARCHITECTURE.md) — the whole system, end to end
