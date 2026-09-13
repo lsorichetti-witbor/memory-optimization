@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from src.memory.durable import DurableProvider, durable_from_env
 from src.memory.mem0_provider import Mem0Provider
 from src.memory.scopes import Scope, ScopeSelector
 
@@ -49,9 +50,22 @@ def add_scope_arguments(parser: argparse.ArgumentParser, required: bool = True) 
     parser.add_argument("--key", required=required, help="scope key, e.g. the repository name")
 
 
-def provider_from_env() -> Mem0Provider:
+def provider_from_env() -> DurableProvider:
+    """The provider every CLI writes through: durable by default.
+
+    Returning the raw transport here is what left `memory_extract --store`,
+    `memory_backup restore` and the seeders able to lose a write. The wrapper
+    changes nothing for readers and queues instead of losing for writers, so
+    every caller gets the guarantee without opting in - and a new script cannot
+    forget to.
+
+    Use `Mem0Provider.from_env()` directly only where queueing would be wrong:
+    `memory_flush` replaying the queue (it would re-enqueue what it is draining)
+    and the evaluation seeders (regenerable from constants, and an eval run must
+    not fill the spool).
+    """
     try:
-        return Mem0Provider.from_env()
+        return durable_from_env(Mem0Provider.from_env())
     except RuntimeError as error:
         print(f"error: {error}", file=sys.stderr)
         print(

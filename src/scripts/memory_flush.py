@@ -22,7 +22,7 @@ import sys
 import httpx
 
 from src.memory.mem0_provider import DEFAULT_TIMEOUT, Mem0Provider
-from src.memory.spool import Spool
+from src.memory.spool import DEFAULT_MAX_ATTEMPTS, Spool
 from src.scripts._common import add_common_arguments, configure_stdout, emit
 
 
@@ -45,6 +45,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--list", action="store_true", dest="list_only", help="show the queue, replay nothing")
     parser.add_argument("--spool", default=None, help="spool directory (default: the shared one)")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="retry entries that are still inside their backoff window",
+    )
+    parser.add_argument(
+        "--max-attempts",
+        type=int,
+        default=DEFAULT_MAX_ATTEMPTS,
+        help=f"move an entry to dead/ after this many failures (default: {DEFAULT_MAX_ATTEMPTS}). "
+        "dead/ is reported, never emptied.",
+    )
     add_common_arguments(parser)
     args = parser.parse_args(argv)
 
@@ -61,41 +73,74 @@ def main(argv: list[str] | None = None) -> int:
                 "kind": e.kind,
                 "topic": e.topic,
                 "text": e.text,
+                "attempts": e.attempts,
+                "last_error": e.last_error,
             }
             for e in entries
         ]
         lines = [f"{spool.pending()} write(s) queued in {spool.root}"]
         for e in entries:
             stamp = e.created_at.strftime("%Y-%m-%d %H:%M:%SZ") if e.created_at else "unknown"
-            lines.append(f"  [{stamp}] {e.user} -> {e.scope.value}:{e.scope_key} ({e.kind}) {e.text[:80]}")
+            attempts = f" [{e.attempts} failed attempt(s)]" if e.attempts else ""
+            lines.append(
+                f"  [{stamp}] {e.user} -> {e.scope.value}:{e.scope_key} ({e.kind}){attempts} {e.text[:80]}"
+            )
+        # Dead entries are still writes somebody wanted kept. Listing the queue
+        # without them would read as "nothing outstanding".
+        if spool.dead():
+            lines.append("")
+            lines.append(f"{spool.dead()} write(s) in {spool.dead_root} gave up after repeated failures.")
+            lines.append("They are still on disk. Inspect them, fix the cause, and move them back to replay.")
         emit(payload, args.json, "\n".join(lines))
         return 0
 
     if spool.pending() == 0:
-        emit({"replayed": 0, "failed": 0, "total": 0}, args.json, f"nothing queued in {spool.root}")
+        emit(
+            {"replayed": 0, "failed": 0, "total": 0, "dead": spool.dead()},
+            args.json,
+            f"nothing queued in {spool.root}"
+            + (f" ({spool.dead()} in {spool.dead_root})" if spool.dead() else ""),
+        )
         return 0
 
-    report = spool.flush(_provider_for)
+    report = spool.flush(_provider_for, force=args.force, max_attempts=args.max_attempts)
 
     payload = {
         "total": report.total,
         "replayed": report.replayed,
+        "already_stored": report.already_stored,
         "failed": report.failed,
+        "deferred": report.deferred,
+        "dead_lettered": report.dead_lettered,
+        "outstanding": report.outstanding,
         "errors": report.errors,
         "spool": str(spool.root),
+        "dead": str(spool.dead_root),
     }
     lines = [report.summary()]
     for error in report.errors:
         lines.append(f"  {error}")
-    if report.failed:
+    if report.failed or report.deferred:
         lines.append("")
-        lines.append(f"{report.failed} write(s) are still queued in {spool.root} and were NOT lost.")
+        lines.append(
+            f"{report.failed + report.deferred} write(s) are still queued in {spool.root} and were NOT lost."
+        )
+        if report.deferred:
+            lines.append("Some are waiting on backoff; --force retries them now.")
         lines.append("Re-run this command once the cause is fixed.")
+    if report.dead_lettered:
+        lines.append("")
+        lines.append(
+            f"{report.dead_lettered} write(s) exhausted {args.max_attempts} attempts and moved to "
+            f"{spool.dead_root}. They are NOT deleted - read the last error, fix it, and move "
+            f"them back into {spool.root} to retry."
+        )
     emit(payload, args.json, "\n".join(lines))
 
-    # Non-zero when anything is still queued: a caller that only checks the exit
-    # code must not read a partial replay as a complete one.
-    return 1 if report.failed else 0
+    # Non-zero when anything did not reach the store, for any reason: a caller
+    # that only checks the exit code must not read a partial replay as a
+    # complete one, and a dead-lettered write is the least visible of all.
+    return 1 if report.outstanding else 0
 
 
 if __name__ == "__main__":

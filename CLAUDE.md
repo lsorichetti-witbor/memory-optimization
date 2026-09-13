@@ -35,12 +35,12 @@ Quick start on a machine that is already set up:
 
 | Path | What |
 |---|---|
-| `src/memory/` | `MemoryProvider` interface + `Mem0Provider`, scopes, lifecycle, extraction |
+| `src/memory/` | `MemoryProvider` interface + `Mem0Provider`, `DurableProvider`, scopes, lifecycle, spool |
 | `src/context/` | Four sources, ranker, dedupe, conflicts, budget, compiler, manager |
 | `src/evaluation/` | Retrieval benchmark: five arms, metrics, seeded dataset |
 | `src/scripts/` | CLI entry points |
 | `skills/context-memory/` | The skill and its `ctx.ps1` launcher |
-| `tests/context_memory/` | 289 tests; 2 require a live server |
+| `tests/context_memory/` | 320 tests; 2 require a live server |
 | `docs/superpowers/plans/` | The implementation plan and its execution log |
 
 ## Rules that apply when working on this code
@@ -65,6 +65,16 @@ Quick start on a machine that is already set up:
 6. **The scoring weights are unmeasured.** They default to 1.0 and are
    documented as placeholders. Change them when the evaluation harness says to,
    not because one task looked wrong.
+7. **Reads may fail fast; writes may not fail at all.** A failed search costs a
+   retry. A failed write costs an observation that existed nowhere else. Every
+   write goes through `DurableProvider` (`provider_from_env()`), which queues on
+   disk *before* the request and deletes only on confirmation. The keep/drop
+   default is **keep**: only a write the server calls malformed is dropped, so
+   an error nobody has seen before lands on the safe side. See
+   [docs/context-memory/DURABILITY.md](docs/context-memory/DURABILITY.md).
+   Never write through a raw `Mem0Provider` unless the input survives its own
+   failure — `memory_flush` and `memory_backup restore` are the two exceptions,
+   and both say why in a docstring.
 
 ## Verifying a change
 
@@ -72,7 +82,7 @@ Quick start on a machine that is already set up:
 .\.venv\Scripts\python.exe -m pytest tests/context_memory -q
 ```
 
-289 tests. The 2 integration tests need `MEM0_API_URL` / `MEM0_API_KEY` /
+320 tests. The 2 integration tests need `MEM0_API_URL` / `MEM0_API_KEY` /
 `MEM0_USER` set — **a skip there is a failure of the check, not a pass.**
 
 A 502 now names its own cause, so read the message before suspecting the code:

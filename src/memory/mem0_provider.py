@@ -15,6 +15,7 @@ import httpx
 
 from src.memory.base import MemoryProvider
 from src.memory.envelope import Envelope, decode_envelope, encode_envelope
+from src.memory.errors import InvalidWrite, Mem0Error
 from src.memory.lifecycle import Lifecycle, parse_lifecycle, transition
 from src.memory.scopes import Scope, scope_identifiers
 from src.memory.types import MemoryPage, MemoryRecord, SearchQuery
@@ -76,23 +77,44 @@ class Mem0Provider(MemoryProvider):
         headers = {"X-API-Key": self._api_key} if self._api_key else {}
         response = self._client.request(method, path, headers=headers, **kwargs)
         if response.status_code >= 400:
-            raise RuntimeError(f"Mem0 {method} {path} failed [{response.status_code}]: {self._detail(response)}")
+            detail, code, request_id = self._error_fields(response)
+            raise Mem0Error(
+                f"Mem0 {method} {path} failed [{response.status_code}]: {detail}",
+                code=code,
+                status=response.status_code,
+                request_id=request_id,
+            )
         if not response.content:
             return None
         try:
             return response.json()
         except ValueError:
-            raise RuntimeError(f"Mem0 {method} {path} returned a non-JSON body: {response.text[:200]!r}") from None
+            # A body that will not parse is an infrastructure problem - a proxy
+            # error page, a truncated response - not a malformed write. It gets
+            # the default code so it is treated as temporary.
+            raise Mem0Error(
+                f"Mem0 {method} {path} returned a non-JSON body: {response.text[:200]!r}",
+                status=response.status_code,
+            ) from None
 
     @staticmethod
-    def _detail(response: httpx.Response) -> str:
+    def _error_fields(response: httpx.Response) -> tuple[str, str, Optional[str]]:
+        """Pull the detail, the server's classification, and the request id.
+
+        `code` and `request_id` come from server/errors.py's handler. A response
+        without them (an upstream 502 from a proxy, say) yields "unknown", which
+        is treated as temporary - the safe direction.
+        """
         try:
             body = response.json()
         except ValueError:
-            return response.text[:200]
-        if isinstance(body, dict) and "detail" in body:
-            return str(body["detail"])
-        return str(body)[:200]
+            return (response.text[:200], "unknown", None)
+        if not isinstance(body, dict):
+            return (str(body)[:200], "unknown", None)
+        detail = str(body["detail"]) if "detail" in body else str(body)[:200]
+        code = str(body.get("code") or "unknown")
+        request_id = body.get("request_id")
+        return (detail, code, str(request_id) if request_id else None)
 
     # -- mapping -----------------------------------------------------------
 
@@ -134,14 +156,19 @@ class Mem0Provider(MemoryProvider):
         source: Optional[str] = None,
         infer: bool = False,
         created_at: Optional[datetime] = None,
+        idempotency_key: Optional[str] = None,
     ) -> list[MemoryRecord]:
         """Store a memory.
 
         `infer` defaults to False: a curated memory must be stored as written.
         Letting the extraction LLM rewrite it loses detail silently.
+
+        `idempotency_key` is carried in the metadata so a spooled write that was
+        stored but whose confirmation never got back to the client can be
+        recognised on replay instead of stored twice.
         """
         if not scope_key:
-            raise ValueError("scope_key is required")
+            raise InvalidWrite("scope_key is required")
 
         envelope = Envelope(
             scope=scope,
@@ -157,6 +184,7 @@ class Mem0Provider(MemoryProvider):
             # restored from the spool must not rank as brand new.
             created_at=created_at or datetime.now(timezone.utc),
             tags=tuple(tags),
+            extra={"idempotency_key": idempotency_key} if idempotency_key else {},
         )
         body: dict[str, Any] = {
             "messages": [{"role": "user", "content": text}],

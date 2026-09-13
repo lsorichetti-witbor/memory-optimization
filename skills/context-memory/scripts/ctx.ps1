@@ -140,6 +140,31 @@ function Get-RepoKey {
     return (Split-Path (Get-Location) -Leaf)
 }
 
+function Show-Backlog {
+    <#
+      Say how many writes are queued, after any command that writes.
+
+      A queued write is not a stored write, and nothing else in the output
+      mentions it. Without this line the queue can grow for weeks while every
+      individual command looks like it worked - a slow leak that presents as
+      "memory just doesn't seem to remember much".
+
+      Deliberately silent when the queue is empty: a line that prints on every
+      successful command is a line people stop reading.
+    #>
+    try {
+        $info = & $Python -c "import sys; sys.path.insert(0,'.'); from src.memory.spool import Spool; s=Spool(); print(s.pending()); print(s.dead())"
+        $queued = [int]($info | Select-Object -First 1)
+        $dead = [int]($info | Select-Object -Last 1)
+    } catch { return }
+    if ($queued -gt 0) {
+        Write-Host "spool: $queued write(s) queued and not stored - & '$PSCommandPath' flush" -ForegroundColor Yellow
+    }
+    if ($dead -gt 0) {
+        Write-Host "spool: $dead write(s) in dead/ gave up after repeated failures" -ForegroundColor Red
+    }
+}
+
 $ApiPort = Get-EnvValue -Name 'MEM0_API_PORT' -Default '8888'
 $env:MEM0_API_URL = "http://localhost:$ApiPort"
 $env:MEM0_API_KEY = Get-EnvValue -Name 'ADMIN_API_KEY'
@@ -162,24 +187,35 @@ try {
             $api = try { (Invoke-WebRequest -Uri "$($env:MEM0_API_URL)/docs" -UseBasicParsing -TimeoutSec 5).StatusCode } catch { 'down' }
             Write-Host "Context Manager: $Home_"
             Write-Host "API:             $api  ($($env:MEM0_API_URL))"
-            Write-Host "repository scope: $RepoKey"
-            Write-Host "global scope:     global"
-            Write-Host "user:             $($env:MEM0_USER)"
+            Write-Host "repo scope:      $RepoKey"
+            Write-Host "global scope:    global"
+            Write-Host "user:            $($env:MEM0_USER)"
 
             # Queued writes are invisible until something says so. A memory
             # sitting in the spool is not stored, and nothing else will mention it.
-            $pending = & $Python -c "import sys; sys.path.insert(0,'.'); from src.memory.spool import Spool; s=Spool(); print(s.pending()); print(s.root)"
-            $count = [int]($pending | Select-Object -First 1)
-            $spoolRoot = ($pending | Select-Object -Last 1)
-            Write-Host "spool:            $count queued  ($spoolRoot)"
+            $spoolInfo = & $Python -c "import sys; sys.path.insert(0,'.'); from src.memory.spool import Spool; s=Spool(); print(s.pending()); print(s.dead()); print(s.root)"
+            $count = [int]($spoolInfo | Select-Object -First 1)
+            $deadCount = [int]($spoolInfo | Select-Object -Skip 1 -First 1)
+            $spoolRoot = ($spoolInfo | Select-Object -Last 1)
+            Write-Host "spool:           $count queued, $deadCount dead  ($spoolRoot)"
             if ($count -gt 0) {
                 Write-Host ""
                 Write-Host "$count memory write(s) are queued and NOT stored. Replay them with:" -ForegroundColor Yellow
                 Write-Host "  & '$PSCommandPath' flush" -ForegroundColor Yellow
             }
+            if ($deadCount -gt 0) {
+                Write-Host ""
+                Write-Host "$deadCount write(s) gave up after repeated failures and are in $spoolRoot\dead." -ForegroundColor Red
+                Write-Host "They are still on disk. Read the last error, fix the cause, move them back." -ForegroundColor Red
+            }
             if ($api -eq 'down') {
                 Write-Host ""
                 Write-Host "Start it with: & '$Home_\scripts\stack.ps1' up" -ForegroundColor Yellow
+            }
+            # Non-zero while anything is unstored, not only when the API is down.
+            # A green health check with writes sitting in the queue is exactly
+            # the reassuring-but-wrong answer this whole layer exists to avoid.
+            if ($api -eq 'down' -or $count -gt 0 -or $deadCount -gt 0) {
                 $script:ExitCode = 1
             } else {
                 $script:ExitCode = 0
@@ -250,12 +286,16 @@ try {
             foreach ($t in $Tag) { $a += @('--tag', $t) }
             if ($Json) { $a += '--json' }
             & $Python @a
+            $script:ExitCode = $LASTEXITCODE
+            Show-Backlog
         }
         'extract' {
             $a = @('-m', 'src.scripts.memory_extract', '--repository', $RepoKey, '--since', $Since, '--root', $CallerDir)
             if ($Store) { $a += '--store' }
             if ($Json) { $a += '--json' }
             & $Python @a
+            $script:ExitCode = $LASTEXITCODE
+            Show-Backlog
         }
         'promote' {
             if (-not $Id -or -not $To) { Write-Error "promote needs -Id <memory id> -To durable|stale|superseded" }
@@ -274,7 +314,11 @@ try {
             & $Python @a
         }
     }
-    if ($Command -ne 'health') { $script:ExitCode = $LASTEXITCODE }
+    # `store` and `extract` capture their own exit code before Show-Backlog
+    # runs, because Show-Backlog invokes python and would otherwise overwrite
+    # $LASTEXITCODE - turning a queued write's exit 3 into a 0 that reads as
+    # "stored". `health` computes its own.
+    if ($Command -notin @('health', 'store', 'extract')) { $script:ExitCode = $LASTEXITCODE }
 } finally {
     Pop-Location
 }

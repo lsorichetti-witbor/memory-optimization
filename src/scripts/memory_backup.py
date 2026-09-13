@@ -37,6 +37,13 @@ from src.scripts._common import add_common_arguments, configure_stdout, emit
 
 
 def _provider_for(user: str) -> Mem0Provider:
+    """Raw, not durable - deliberately.
+
+    Restore is the one writer whose input survives its own failure: the backup
+    file is still on disk, so a row that does not land is re-run, not lost.
+    Queueing it would copy hundreds of rows into the spool and bury the writes
+    that genuinely have nowhere else to live.
+    """
     base_url = os.environ.get("MEM0_API_URL")
     if not base_url:
         raise RuntimeError("MEM0_API_URL is not set")

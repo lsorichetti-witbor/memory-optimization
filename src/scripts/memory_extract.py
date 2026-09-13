@@ -25,6 +25,8 @@ from src.memory.extraction import (
     dedupe_candidates,
     filter_storable,
 )
+from src.memory.durable import WriteQueued
+from src.memory.errors import InvalidWrite, Mem0Error
 from src.memory.scopes import Scope
 from src.scripts._common import add_common_arguments, configure_stdout, emit, provider_from_env, repo_root
 
@@ -125,31 +127,64 @@ def main(argv: list[str] | None = None) -> int:
     ]
 
     stored: list[str] = []
+    queued: list[str] = []
+    rejected: list[str] = []
     if args.store and kept:
         provider = provider_from_env()
         try:
+            # Per candidate, not per batch. One bad or queued write used to
+            # abandon every remaining candidate in the batch - the largest
+            # single loss in the system, because these come from a transcript
+            # that may already be gone.
             for candidate in kept:
-                records = provider.add(
-                    candidate.text,
-                    scope=candidate.scope,
-                    scope_key=candidate.scope_key,
-                    kind=candidate.kind,
-                    topic=candidate.topic,
-                    tags=candidate.tags,
-                    confidence=candidate.confidence,
-                    importance=candidate.importance,
-                    source=f"extraction:{args.since}..HEAD",
-                )
-                stored.extend(r.id for r in records)
-        except (RuntimeError, ValueError) as error:
-            print(f"error: {error}", file=sys.stderr)
-            return 1
+                try:
+                    records = provider.add(
+                        candidate.text,
+                        scope=candidate.scope,
+                        scope_key=candidate.scope_key,
+                        kind=candidate.kind,
+                        topic=candidate.topic,
+                        tags=candidate.tags,
+                        confidence=candidate.confidence,
+                        importance=candidate.importance,
+                        source=f"extraction:{args.since}..HEAD",
+                    )
+                    stored.extend(r.id for r in records)
+                except WriteQueued as q:
+                    queued.append(str(q.path))
+                except (InvalidWrite, Mem0Error) as error:
+                    rejected.append(f"{candidate.topic or candidate.text[:40]}: {error}")
         finally:
             provider.close()
 
+        if queued:
+            print("", file=sys.stderr)
+            print(
+                f"WARNING: {len(queued)} of {len(kept)} extracted memories were NOT stored. "
+                f"They are queued and will not be lost.",
+                file=sys.stderr,
+            )
+            print("  replay with: python -m src.scripts.memory_flush", file=sys.stderr)
+        for line in rejected:
+            print(f"rejected: {line}", file=sys.stderr)
+
+    # Non-zero whenever anything did not reach the store, so a script that only
+    # checks the exit code cannot read a partly-queued run as a complete one.
+    exit_code = 1 if rejected else (3 if queued else 0)
+
     if args.json:
-        emit({"candidates": payload, "stored": stored, "summary": report.summary()}, True, "")
-        return 0
+        emit(
+            {
+                "candidates": payload,
+                "stored": stored,
+                "queued": queued,
+                "rejected": rejected,
+                "summary": report.summary(),
+            },
+            True,
+            "",
+        )
+        return exit_code
 
     lines = [
         f"{len(raw)} raw -> {len(deduped)} after dedupe -> {report.summary()}",
@@ -162,12 +197,18 @@ def main(argv: list[str] | None = None) -> int:
         lines.append("nothing worth storing from these artifacts")
     lines.append("")
     if args.store:
-        lines.append(f"stored {len(stored)} memories at lifecycle=candidate")
+        # With their denominator: "stored 4" beside 6 candidates hides the two
+        # that did not make it.
+        lines.append(f"stored {len(stored)} of {len(kept)} memories at lifecycle=candidate")
+        if queued:
+            lines.append(f"queued {len(queued)} of {len(kept)} for replay (not lost)")
+        if rejected:
+            lines.append(f"rejected {len(rejected)} of {len(kept)} as malformed (not queued)")
         lines.append("promote with: python -m src.scripts.memory_promote --id <id> --to durable")
     else:
         lines.append("nothing written. re-run with --store to write these as candidates.")
     print("\n".join(lines))
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":

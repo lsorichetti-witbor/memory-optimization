@@ -1,7 +1,15 @@
 # Not losing a write
 
-*Status: proposal. Nothing here is implemented yet — the "Today" section is
-measured against the running stack on 2026-09-13, the rest is design.*
+*Status: **implemented** (option B), 2026-09-13. The "Today" section below
+describes the behaviour this replaced; "Proposed" is what now runs. Verified
+end-to-end against the live stack with the Gemini quota genuinely exhausted —
+see "What was verified" at the end.*
+
+*One correction to the original proposal: it listed `memory_backup restore` as a
+loss case. It is not. Restore reads a backup file that is still on disk, so a
+row that fails is re-run, not lost — it is the one writer whose input survives
+its own failure, and it stays on the raw provider so a bulk restore cannot bury
+the queue under rows that have another copy.*
 
 Reads and writes are not worth the same. A search that fails is retried by the
 person who ran it, one second later, at no cost. A write that fails takes an
@@ -228,3 +236,34 @@ Each of these has to be exercised deliberately, because all of them are silent:
 
 The property under test is always the same one, and it is not "did it store":
 it is **no write disappears without a human being told**.
+
+## What was verified
+
+Against the running stack, with the Gemini daily quota genuinely exhausted, so
+the failure is real rather than simulated:
+
+| Step | Result |
+|---|---|
+| `memory_store` while the embedder 429s | exit 3, entry on disk, advice names the quota — not "start the stack" |
+| `memory_flush` | `0 of 1 replayed, 1 failed and still queued`, attempt counted, exit 1 |
+| `memory_flush` again, immediately | `1 waiting on backoff … eligible at 18:38:00Z`, attempt **not** burned |
+| `memory_flush --force` | retried at once, attempt 2 |
+| `--max-attempts 3`, third failure | moved to `dead/`, file still present with its text and last error |
+| `memory_flush --list` | shows `[1 failed attempt(s)]` per entry |
+
+320 tests, including 28 new ones in `tests/context_memory/test_durable.py`.
+Verified red: restoring the old string-matching predicate fails 13 of them,
+among them all nine error types that were previously discarded.
+
+Not verified live, and honestly so: **a queued write replaying to success.**
+That needs one working embedding call and the quota is spent, so the success
+path is covered only by the unit tests with a fake provider. It should be re-run
+after the quota resets — the command is `memory_flush --force`, and the check is
+that the spool empties and the memory is searchable.
+
+`scripts/test-offline-spool.ps1` reports **13 of 23** for the same reason: its
+phase 1 (queueing, isolation, multi-user, multi-repo) passes in full, and every
+one of the 10 failures is in the replay phase, which cannot store anything until
+the quota resets. Reproduced directly to confirm rather than inferred: a
+one-entry spool replayed against the live server returns the same
+`502 … embed_content_free_tier_requests, limit 1000`.

@@ -73,10 +73,40 @@ def test_entries_come_back_in_the_order_they_were_queued(tmp_path):
 
 
 def test_a_round_trip_preserves_every_field(tmp_path):
+    from dataclasses import replace
+
     spool = Spool(root=tmp_path)
     original = entry(tags=("infra", "ports"), confidence=0.9, importance=0.8, source="session:x")
     spool.enqueue(original)
-    assert spool.entries()[0] == original
+    stored = spool.entries()[0]
+    # enqueue assigns an idempotency key, so the read-back is the original plus
+    # that one field. Compare with it filled in rather than loosening the
+    # comparison field by field, which would stop catching a dropped field.
+    assert stored == replace(original, idempotency_key=stored.idempotency_key)
+
+
+def test_enqueue_assigns_an_idempotency_key(tmp_path):
+    # Without a key the replay cannot tell "never stored" from "stored, but the
+    # confirmation never arrived", and a crash between the two duplicates.
+    spool = Spool(root=tmp_path)
+    spool.enqueue(entry())
+    assert spool.entries()[0].idempotency_key
+
+
+def test_each_queued_write_gets_its_own_key(tmp_path):
+    spool = Spool(root=tmp_path)
+    spool.enqueue(entry(text="One memory worth keeping for later."))
+    spool.enqueue(entry(text="A different memory worth keeping too."))
+    keys = {e.idempotency_key for e in spool.entries()}
+    assert len(keys) == 2, "a shared key would make the second write look already stored"
+
+
+def test_a_caller_supplied_key_is_kept(tmp_path):
+    # DurableProvider passes the key it will send to the server; overwriting it
+    # here would mean the stored key and the queued key never match.
+    spool = Spool(root=tmp_path)
+    spool.enqueue(entry(idempotency_key="chosen-by-the-caller"))
+    assert spool.entries()[0].idempotency_key == "chosen-by-the-caller"
 
 
 def test_the_original_timestamp_survives_and_is_not_the_replay_time(tmp_path):
@@ -173,8 +203,12 @@ def test_the_report_states_the_denominator(tmp_path):
     spool.enqueue(entry(text="This one fails on replay entirely."))
     spool.enqueue(entry(text="This one succeeds on replay entirely."))
     report = spool.flush(lambda user: FakeProvider(fail_on={"This one fails on replay entirely."}))
+    # The property is that the denominator is present and the leftover is
+    # counted, not the exact wording - pinning the phrase would break on any
+    # rewording that kept the report correct.
     assert report.summary().startswith("1 of 2 spooled writes replayed")
-    assert "1 still queued" in report.summary()
+    assert report.outstanding == 1
+    assert "1" in report.summary() and "queued" in report.summary()
 
 
 def test_a_corrupt_spool_file_is_reported_and_left_alone(tmp_path):

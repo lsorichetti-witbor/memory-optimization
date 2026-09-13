@@ -29,8 +29,15 @@ class MemoryProvider(ABC):
         source: Optional[str] = None,
         infer: bool = False,
         created_at: Optional[Any] = None,
+        idempotency_key: Optional[str] = None,
     ) -> list[MemoryRecord]:
-        """Store a memory. Raises if the backend accepted the call but stored nothing."""
+        """Store a memory. Raises if the backend accepted the call but stored nothing.
+
+        `idempotency_key`, when given, must be stored with the memory and be
+        retrievable, so a replayed write can be recognised rather than
+        duplicated. An implementation that cannot persist it should say so
+        rather than silently accepting and dropping it.
+        """
 
     @abstractmethod
     def search(self, query: SearchQuery) -> list[MemoryRecord]:
