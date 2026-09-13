@@ -84,6 +84,41 @@ python -m src.scripts.memory_store \
 `incident`, `note`. `--topic` is the stable key conflict detection uses — supply
 it whenever the memory makes a claim that the repository could later contradict.
 
+## Extracting memories from a session
+
+```bash
+# review only - writes nothing
+python -m src.scripts.memory_extract --repository memory-optimization --since HEAD~5
+
+# store the survivors, all at lifecycle=candidate
+python -m src.scripts.memory_extract --repository memory-optimization --since HEAD~5 --store
+```
+
+Also takes `--decision`, `--tool-error` and `--test-failure` (each repeatable)
+for things git does not record. Ordinary commits are deliberately **not**
+extracted: they are already in git, and the repository layer reads them live.
+Only a breaking change or a fix that states its cause becomes a candidate.
+
+Nothing is written without `--store`, and even then everything lands at
+`candidate`. That gap is the review gate — do not collapse it.
+
+## Evaluating
+
+```bash
+python -m src.scripts.context_eval --seed          # seed memories, then run
+python -m src.scripts.context_eval --no-memory     # static layers only
+```
+
+Compares five arms: `full`, `static-docs-only`, `memory-only`,
+`static+memory`, `static+memory+state`. **Retrieval-only** — it measures what
+gets selected, not whether an agent answers correctly, and the report says so
+every run. `full` is the control: if the full manager does not beat it on tokens
+at comparable recall, the selection layer is not earning its place.
+
+The shipped dataset is eight questions about this one repository. That is not
+LongMemEval and cannot support a general claim — see
+[evaluation.md](references/evaluation.md).
+
 ## Searching and lifecycle
 
 ```bash

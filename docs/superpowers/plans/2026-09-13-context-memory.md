@@ -8,8 +8,8 @@
 
 **Tech Stack:** Python 3.11, `httpx` (already a `mem0ai` dependency), pytest, self-hosted Mem0 FastAPI server + `pgvector/pgvector:pg17` via Docker Compose, Gemini for both LLM and embedder.
 
-> **STATUS (2026-09-13):** Phases 1-4 implemented. 59 of 74 plan steps done;
-> `174 passed` on `.venv/Scripts/python.exe -m pytest tests/context_memory -q` with
+> **STATUS (2026-09-13):** Phases 1-6 implemented; dashboard fixed. all plan steps done for phases 1-6;
+> `223 passed` on `.venv/Scripts/python.exe -m pytest tests/context_memory -q` with
 > `MEM0_API_URL`/`MEM0_API_KEY`/`MEM0_USER` set.
 > Remaining unchecked: the 15 `Commit` steps (nothing has been committed - the repo
 > is on `main` and awaiting the user's call), plus Step 1.5 and Step 4.5, which are
@@ -20,7 +20,7 @@
 
 **Source spec:** `C:\Users\Witbor\Desktop\mem0_self_hosted_context_memory_handoff_v2.md`
 
-**Scope of this plan:** Handoff phases 1-4. Phases 5 (memory extraction), 6 (evaluation harness) and section 19 (general `CLAUDE.md` refactor) are specified at the end as follow-on work, not executed here.
+**Scope of this plan:** Handoff phases 1-6. Phases 1-4 were built first; phases 5 (memory extraction) and 6 (evaluation harness) followed, along with the dashboard fix. Section 19 (general `CLAUDE.md` refactor) remains follow-on - see the note at the end for why it is deliberately last.
 
 ---
 
@@ -2120,21 +2120,120 @@ git commit -m "feat(context): cli entry points and the context-memory skill"
 
 ---
 
-# Follow-on work (specified, not executed in this plan)
+# Phases 5 and 6 - built
 
 ## Phase 5 - Memory extraction
 
-Build `src/memory/extraction.py`: given a session transcript or a task summary, propose candidate memories. Store nothing automatically. Every candidate enters at `lifecycle=candidate` with the extracting session recorded in `source`. Only decisions, discoveries, lessons, stable conventions, validated tool behaviour and important failures qualify (handoff section 18 phase 5). Gate: a human or a reviewing agent promotes `candidate -> durable`.
+`src/memory/extraction.py` plus `src/scripts/memory_extract.py`.
 
-## Phase 6 - Evaluation
+Two gates, both structural rather than advisory:
 
-`evaluation/context-manager/` harness comparing the five configurations of handoff section 18 phase 6: full context, static docs only, Mem0 only, static + Mem0, static + Mem0 + current state. Metrics from section 15, reported with the section 16 methodology block (dataset, model, retrieval config, top-K, reranker, token budget, latency, run count, self-reported flag). Retrieval Recall@K must never be reported as an end-to-end score. **This phase is what turns the ranker's placeholder weights into measured ones**; until it runs, they stay documented as unmeasured.
+- `Candidate.__post_init__` refuses any lifecycle but `candidate`. Extraction
+  cannot produce durable memory even by mistake, so the promotion step cannot be
+  bypassed by a caller that forgets it exists.
+- `memory_extract` writes nothing without `--store`, and even then everything
+  lands at `candidate` and needs `memory_promote --to durable`.
 
-## Section 19 - General CLAUDE.md refactor
+`filter_storable` rejects candidates that merely restate the repository, and
+counts each rejection by reason rather than dropping them quietly. Ordinary
+commits are deliberately not extracted at all - they are already in git, and the
+repository layer reads git live. Only a breaking change, or a fix that states its
+cause, carries something git does not.
 
-Mandatory final step of the handoff, deliberately deferred until phases 5-6 exist, because 19.6 requires measuring whether task success regressed and there is no harness to measure it with yet. Input: `C:\Users\Witbor\.claude\CLAUDE.md`. Classify every rule A-F, keep policy, move NetSuite/Graphify rules to project rule files, extract the embedded concrete measurements (the three-files-one-label truncation incident, the 2-of-96 multi-value query, the 10-of-53 truncated report, the 833-of-1217 no-op rebuild, the 1:1 fan-in miscount, the desynced generated artifacts) into Mem0 as `scope=global, kind=incident` memories, then measure the token reduction and re-run representative tasks against both versions.
+A defect the first live run found, fixed with a regression test that was watched
+failing first: the cause regex used `re.S`, so a candidate swallowed every
+paragraph after the cause, git trailers included. Trailers are now stripped and
+the capture is bounded to its own paragraph.
 
----
+## Phase 6 - Evaluation harness
+
+`src/evaluation/` plus `src/scripts/context_eval.py`. Five arms per handoff
+section 18 phase 6, a repo-local dataset of 8 cases, and a seeded memory store so
+runs are reproducible.
+
+Design decisions that matter more than the numbers:
+
+- **Undefined is not zero.** A case with no relevant items, or an arm that
+  returned nothing, is excluded from the mean and reported as `n/a` with the
+  scoreable-case count beside it. Scoring it 0.0 would drag the mean down with a
+  case that was never scoreable.
+- **Precision divides by what was returned, not by k**, so a short but perfect
+  result list is not punished - which is the behaviour a context manager should
+  have.
+- **Ground truth keys on stable identities**: source paths for file layers,
+  `mem0:<topic>` for memory. Chunk ids are content-derived and Mem0 ids are fresh
+  uuids per seed, so a dataset keyed on either would score zero forever and look
+  exactly like poor retrieval.
+- **The report cannot print `answer_accuracy`.** This is retrieval-only, and the
+  easiest way not to misreport a Recall@K as an end-to-end QA score is to make
+  the field impossible to populate.
+- **The report names its own ceiling.** `unreachable_ground_truth` finds items no
+  source produces at any budget and prints them, so a coverage gap cannot be
+  mistaken for a ranking failure.
+
+### Measured, 2026-09-13, 8 cases, top_k=10, budget=8000, heuristic token counter
+
+| arm | recall@k | tokens |
+|---|---:|---:|
+| full (no selection) | 0.510 | 87,112 |
+| static-docs-only | 0.375 | 8,000 |
+| memory-only | 0.167 | 301 |
+| static+memory | 0.479 | 8,000 |
+| static+memory+state | 0.479 | 8,000 |
+
+The headline: **94% of the ceiling's recall on 9% of the tokens.** That is the
+claim the handoff asked to be proved, and it is proved on this dataset only.
+
+Memory contributes: static-only 0.375 to static+memory 0.479, a 28% relative
+gain, with 5 memories injected against an 8,000 token budget.
+
+**Do not generalise this.** Eight questions about one repository cannot support a
+claim about retrieval quality, and a weight tuned here has been measured on a
+different basis than any published benchmark number. `ScoringWeights` therefore
+stays documented as unmeasured. Wiring LongMemEval or BEAM through
+`EvalDataset.from_json` is what would change that.
+
+### What the harness found in the system it was measuring
+
+This is the part worth keeping. Running it immediately exposed three defects that
+every unit test had passed over:
+
+1. **Half the ground truth was unreachable.** `RepositorySource` collected only a
+   root `README.md`, `docs/`, and root manifests. Measured on this repo: 30
+   `README.md` files, 11 `AGENTS.md`, and exactly one `docker-compose.yaml` -
+   which is at `server/`, not the root, so that manifest entry had never matched
+   anything at all. Both file sources now walk the tree with a vendor-directory
+   exclusion list and a reported file cap.
+2. **Pinning every instruction file made the tool unusable.** With 11 `AGENTS.md`
+   reachable, pinned policy came to 13,373 tokens against an 8,000 budget and the
+   build raised `BudgetExceeded`. The safety valve worked exactly as designed and
+   proved the design wrong: in a polyglot monorepo `cli/node/AGENTS.md` is not
+   policy for a server task. Only instructions on the task's own path are pinned
+   now; the rest are ordinary ranked candidates. This repo's own AGENTS.md states
+   the same rule - read the one nearest the files you are editing.
+3. **The residual gap is attributed, not hand-waved.** After the fixes, 4
+   ground-truth items remain unreachable: `server/main.py`,
+   `skills/context-memory/SKILL.md`, its `references/context-precedence.md`, and
+   `.gitattributes`. Cause: the repository layer indexes docs and manifests, not
+   source files or dotfile config. `.env.example` was added as a manifest because
+   it is the canonical configuration surface, justified independently of the
+   benchmark; source-code indexing was NOT added to chase the number, and the
+   limit is now stated in code, in a test, and in every generated report.
+
+## Section 19 - General CLAUDE.md refactor, still follow-on
+
+Input: the user's global `CLAUDE.md` under `~/.claude/`. Classify every rule A-F,
+keep policy, move NetSuite/Graphify rules to project rule files, extract the
+embedded concrete measurements into Mem0 as `scope=global, kind=incident`
+memories, then measure the token reduction and re-run representative tasks
+against both versions.
+
+Deliberately last, and the reason is now stronger than when this plan was
+written: step 19.6 requires measuring whether task success regressed, and the
+harness that exists measures *retrieval on eight repo-local questions*. It cannot
+answer whether a rewritten instruction file makes an agent behave better. Running
+19 against it would be inheriting a target from a different measurement basis -
+the exact failure the file's own rules warn about.
 
 ## Self-review
 
@@ -2263,3 +2362,31 @@ Two things worth keeping from this:
   was completely broken. A green suite said nothing about the LLM path.
 - A model id in a doc, an SDK default, or even an API error message is a claim,
   not a measurement. `models.list()` is the measurement.
+
+## 11. The dashboard needed a different CA fix, and the order was not obvious
+
+`server/dashboard` (node:20-alpine, pnpm via corepack) took three rounds:
+
+- `apk` needs the interception cert to reach its own package index, so the bundle
+  must be seeded by hand BEFORE any `apk add`. Installing `ca-certificates` first
+  cannot work - that install is the thing that needs the cert.
+- `update-ca-certificates` then regenerates the bundle from scratch and does NOT
+  recurse into a subdirectory of `/usr/local/share/ca-certificates`, silently
+  dropping what the seeding step added. Measured: 119 certs in the bundle with
+  the local root gone, and `apk` working while every Node download still failed.
+- Node ignores the system trust store entirely. `NODE_EXTRA_CA_CERTS` must point
+  at a real, non-empty PEM, so on a normal network it is pointed at a copy of
+  the system bundle rather than an empty file, which would make Node warn on
+  every invocation.
+
+Also a cache trap worth remembering: a `--target base` build reused a cached
+`COPY certs/` layer and produced an image with the `.crt` missing, while the same
+build with `--no-cache` had it. The probe that found this listed the directory
+inside the image rather than trusting the host.
+
+## 12. Docker Desktop instability is a fact of this machine
+
+Five builds died with `rpc error: code = Unavailable desc = error reading from
+server: EOF`, twice leaving the API returning 500. Not resource pressure: 15.7 GB
+RAM with 6.1 GB free, 257 GB free on C:. Every build is now wrapped in a
+restart-and-retry loop; the dashboard succeeded on attempt 4.
