@@ -25,7 +25,7 @@ class Scope(str, Enum):
     GLOBAL = "global"
     USER = "user"
     PROJECT = "project"
-    REPOSITORY = "repository"
+    REPOSITORY = "repo"
     BRANCH = "branch"
     SESSION = "session"
     TASK = "task"
@@ -40,12 +40,22 @@ class Scope(str, Enum):
         try:
             return cls(value)
         except ValueError:
-            raise ValueError(f"unknown scope: {value!r}. Known: {', '.join(SCOPES)}") from None
+            pass
+        # Backward compatibility for data written before the repository scope was
+        # renamed to `repo`. Accepted on the way IN only - nothing writes it - so
+        # an export taken before the rename still restores.
+        if value in _LEGACY_SCOPE_ALIASES:
+            return _LEGACY_SCOPE_ALIASES[value]
+        raise ValueError(f"unknown scope: {value!r}. Known: {', '.join(SCOPES)}") from None
 
 
 SCOPES: tuple[str, ...] = tuple(s.value for s in Scope.ordered())
 
+_LEGACY_SCOPE_ALIASES = {"repository": Scope.REPOSITORY}
+
 # Which Mem0 identifier carries each scope, and how its key is prefixed.
+# Each prefix is its scope value plus a colon, so `scope` and `agent_id` say the
+# same word about the same memory.
 _AGENT_PREFIX = {Scope.PROJECT: "project:", Scope.REPOSITORY: "repo:", Scope.USER: "user:"}
 _RUN_PREFIX = {Scope.BRANCH: "branch:", Scope.SESSION: "session:", Scope.TASK: "task:"}
 

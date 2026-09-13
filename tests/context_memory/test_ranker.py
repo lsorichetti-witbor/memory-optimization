@@ -94,14 +94,14 @@ def test_task_scope_match_rewards_an_item_scoped_to_the_task_repository():
         layer=Layer.MEMORY,
         content="x",
         source="mem0",
-        metadata={"scope": "repository", "scope_key": "memory-optimization"},
+        metadata={"scope": "repo", "scope_key": "memory-optimization"},
     )
     elsewhere = ContextItem(
         id="b",
         layer=Layer.MEMORY,
         content="x",
         source="mem0",
-        metadata={"scope": "repository", "scope_key": "other-repo"},
+        metadata={"scope": "repo", "scope_key": "other-repo"},
     )
     ranked = ContextRanker().rank([elsewhere, on_repo], Task(description="x", repository="memory-optimization"))
     assert ranked[0].id == "a"

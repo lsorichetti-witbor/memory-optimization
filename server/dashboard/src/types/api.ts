@@ -39,13 +39,7 @@ export interface ApiRequestLog {
   auth_type: string;
 }
 
-/**
- * `user`, `agent` and `run` are Mem0's own identifiers. `scope` is derived from
- * the scope/scope_key metadata, and exists because the three identifiers cannot
- * express every grouping: a global-scope memory carries only a user_id, so it
- * had no entity of its own and was visible only inside the user's total.
- */
-export type EntityType = "user" | "agent" | "run" | "scope";
+export type EntityType = "user" | "agent" | "run";
 
 export interface Entity {
   id: string;

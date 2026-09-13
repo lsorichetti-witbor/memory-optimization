@@ -143,7 +143,7 @@ def test_metadata_carries_the_scope_so_the_ranker_can_match_it():
     items = source({Scope.GLOBAL: [record("m1", "x", Scope.REPOSITORY, topic="vector_store")]}).collect(
         Task(description="x")
     )
-    assert items[0].metadata["scope"] == "repository"
+    assert items[0].metadata["scope"] == "repo"
     assert items[0].metadata["topic"] == "vector_store"
 
 

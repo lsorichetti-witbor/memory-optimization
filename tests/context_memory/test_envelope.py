@@ -24,7 +24,7 @@ def _envelope(**overrides) -> Envelope:
 
 def test_encode_produces_flat_json_safe_metadata():
     encoded = encode_envelope(_envelope())
-    assert encoded["scope"] == "repository"
+    assert encoded["scope"] == "repo"
     assert encoded["lifecycle"] == "durable"
     assert encoded["confidence"] == 0.8
     assert encoded["created_at"] == "2026-09-13T12:00:00+00:00"

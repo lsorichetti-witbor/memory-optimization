@@ -42,7 +42,7 @@ def test_add_posts_messages_scope_identifiers_and_encoded_envelope():
     ]
     assert seen["body"]["user_id"] == "lautaro"
     assert seen["body"]["agent_id"] == "repo:memory-optimization"
-    assert seen["body"]["metadata"]["scope"] == "repository"
+    assert seen["body"]["metadata"]["scope"] == "repo"
     assert seen["body"]["metadata"]["lifecycle"] == "candidate"
     assert seen["body"]["metadata"]["topic"] == "server.default_provider"
     assert [r.id for r in records] == ["m1"]
@@ -84,7 +84,7 @@ def test_search_sends_filters_and_top_k_and_parses_scores():
                         "id": "m1",
                         "memory": "a fact",
                         "score": 0.71,
-                        "metadata": {"scope": "repository", "scope_key": "memory-optimization"},
+                        "metadata": {"scope": "repo", "scope_key": "memory-optimization"},
                         "created_at": "2026-09-01T10:00:00+00:00",
                     }
                 ]
@@ -234,7 +234,7 @@ def test_a_repository_search_is_scoped_to_that_repository_key():
     make_provider(handler).search(
         SearchQuery(query="q", scope=Scope.REPOSITORY, scope_key="memory-optimization")
     )
-    assert seen["body"]["filters"]["scope"] == "repository"
+    assert seen["body"]["filters"]["scope"] == "repo"
     assert seen["body"]["filters"]["scope_key"] == "memory-optimization"
 
 
@@ -250,7 +250,7 @@ def test_get_all_drops_rows_from_other_scopes():
                 "results": [
                     {"id": "g1", "memory": "global fact", "metadata": {"scope": "global", "scope_key": "global"}},
                     {"id": "r1", "memory": "repo fact",
-                     "metadata": {"scope": "repository", "scope_key": "memory-optimization"}},
+                     "metadata": {"scope": "repo", "scope_key": "memory-optimization"}},
                 ]
             },
         )
@@ -269,7 +269,7 @@ def test_get_all_truncation_reflects_the_server_page_not_the_filtered_count():
             json={
                 "results": [
                     {"id": f"r{i}", "memory": "x",
-                     "metadata": {"scope": "repository", "scope_key": "other"}}
+                     "metadata": {"scope": "repo", "scope_key": "other"}}
                     for i in range(3)
                 ]
             },
@@ -297,7 +297,7 @@ def test_delete_all_for_the_global_scope_does_not_delete_other_scopes():
                     "results": [
                         {"id": "g1", "memory": "global", "metadata": {"scope": "global", "scope_key": "global"}},
                         {"id": "r1", "memory": "repo",
-                         "metadata": {"scope": "repository", "scope_key": "memory-optimization"}},
+                         "metadata": {"scope": "repo", "scope_key": "memory-optimization"}},
                     ]
                 },
             )
