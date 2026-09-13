@@ -31,7 +31,7 @@ ctx.ps1 health
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('build', 'search', 'store', 'extract', 'promote', 'eval', 'health')]
+    [ValidateSet('build', 'search', 'store', 'extract', 'promote', 'eval', 'health', 'flush')]
     [string]$Command = 'health',
 
     [string]$Task,
@@ -67,7 +67,8 @@ param(
     [switch]$ReportOnly,
     [switch]$Store,
     [switch]$Json,
-    [switch]$NoMemory
+    [switch]$NoMemory,
+    [switch]$List
 )
 
 $ErrorActionPreference = 'Stop'
@@ -158,6 +159,18 @@ try {
             Write-Host "repository scope: $RepoKey"
             Write-Host "shared scope:     global"
             Write-Host "user:             $($env:MEM0_USER)"
+
+            # Queued writes are invisible until something says so. A memory
+            # sitting in the spool is not stored, and nothing else will mention it.
+            $pending = & $Python -c "import sys; sys.path.insert(0,'.'); from src.memory.spool import Spool; s=Spool(); print(s.pending()); print(s.root)"
+            $count = [int]($pending | Select-Object -First 1)
+            $spoolRoot = ($pending | Select-Object -Last 1)
+            Write-Host "spool:            $count queued  ($spoolRoot)"
+            if ($count -gt 0) {
+                Write-Host ""
+                Write-Host "$count memory write(s) are queued and NOT stored. Replay them with:" -ForegroundColor Yellow
+                Write-Host "  & '$PSCommandPath' flush" -ForegroundColor Yellow
+            }
             if ($api -eq 'down') {
                 Write-Host ""
                 Write-Host "Start it with: & '$Home_\scripts\stack.ps1' up" -ForegroundColor Yellow
@@ -239,6 +252,12 @@ try {
         }
         'eval' {
             & $Python -m src.scripts.context_eval --seed
+        }
+        'flush' {
+            $a = @('-m', 'src.scripts.memory_flush')
+            if ($List) { $a += '--list' }
+            if ($Json) { $a += '--json' }
+            & $Python @a
         }
     }
     if ($Command -ne 'health') { $script:ExitCode = $LASTEXITCODE }

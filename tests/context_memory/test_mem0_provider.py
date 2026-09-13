@@ -278,3 +278,51 @@ def test_get_all_truncation_reflects_the_server_page_not_the_filtered_count():
     page = make_provider(handler).get_all(scope=Scope.GLOBAL, scope_key="global", top_k=3)
     assert page.returned == 0
     assert page.truncated is True
+
+
+def test_delete_all_for_the_global_scope_does_not_delete_other_scopes():
+    # Measured, destructively: scope_identifiers(GLOBAL, ...) emits only user_id,
+    # so DELETE /memories?user_id=<user> removed every memory that user had in
+    # EVERY scope. A scoped delete silently became a global one and wiped the
+    # seeded evaluation set. delete_all must never use the bulk endpoint for a
+    # scope the identifier triple cannot isolate.
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, str(request.url)))
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {"id": "g1", "memory": "global", "metadata": {"scope": "global", "scope_key": "global"}},
+                        {"id": "r1", "memory": "repo",
+                         "metadata": {"scope": "repository", "scope_key": "memory-optimization"}},
+                    ]
+                },
+            )
+        return httpx.Response(200, json={"message": "Memory deleted successfully"})
+
+    make_provider(handler).delete_all(scope=Scope.GLOBAL, scope_key="global")
+
+    deletes = [url for method, url in requests if method == "DELETE"]
+    assert any("/memories/g1" in url for url in deletes), "the global memory should be deleted"
+    assert not any("/memories/r1" in url for url in deletes), "a repository memory must NOT be deleted"
+    assert not any(url.endswith("/memories") for url in deletes), "the bulk endpoint must not be used"
+
+
+def test_delete_all_reports_how_many_it_removed():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {"id": f"g{i}", "memory": "x", "metadata": {"scope": "global", "scope_key": "global"}}
+                        for i in range(3)
+                    ]
+                },
+            )
+        return httpx.Response(200, json={"message": "ok"})
+
+    assert make_provider(handler).delete_all(scope=Scope.GLOBAL, scope_key="global") == 3

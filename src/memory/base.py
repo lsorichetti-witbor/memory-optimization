@@ -28,6 +28,7 @@ class MemoryProvider(ABC):
         importance: float = 0.5,
         source: Optional[str] = None,
         infer: bool = False,
+        created_at: Optional[Any] = None,
     ) -> list[MemoryRecord]:
         """Store a memory. Raises if the backend accepted the call but stored nothing."""
 
@@ -58,8 +59,13 @@ class MemoryProvider(ABC):
         """Delete one memory."""
 
     @abstractmethod
-    def delete_all(self, *, scope: Scope, scope_key: str) -> None:
-        """Delete every memory in a scope."""
+    def delete_all(self, *, scope: Scope, scope_key: str) -> int:
+        """Delete every memory in a scope, returning how many were removed.
+
+        Implementations must not over-reach: a scope the backend cannot filter
+        on has to be enumerated and deleted by id, never wiped with a broader
+        bulk call.
+        """
 
     @abstractmethod
     def history(self, memory_id: str) -> list[dict[str, Any]]:

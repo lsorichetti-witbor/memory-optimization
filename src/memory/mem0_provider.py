@@ -133,6 +133,7 @@ class Mem0Provider(MemoryProvider):
         importance: float = 0.5,
         source: Optional[str] = None,
         infer: bool = False,
+        created_at: Optional[datetime] = None,
     ) -> list[MemoryRecord]:
         """Store a memory.
 
@@ -151,7 +152,10 @@ class Mem0Provider(MemoryProvider):
             importance=importance,
             topic=topic,
             source=source,
-            created_at=datetime.now(timezone.utc),
+            # A replayed write keeps the time it was MADE, not the time it was
+            # replayed: recency is a ranking signal, and a month-old memory
+            # restored from the spool must not rank as brand new.
+            created_at=created_at or datetime.now(timezone.utc),
             tags=tuple(tags),
         )
         body: dict[str, Any] = {
@@ -257,10 +261,32 @@ class Mem0Provider(MemoryProvider):
     def delete(self, memory_id: str) -> None:
         self._request("DELETE", f"/memories/{memory_id}")
 
-    def delete_all(self, *, scope: Scope, scope_key: str) -> None:
+    def delete_all(self, *, scope: Scope, scope_key: str, page: int = 1000) -> int:
+        """Delete every memory in one scope. Returns how many were removed.
+
+        Deliberately NOT the bulk `DELETE /memories` endpoint. That endpoint
+        filters on the identifier triple only, and `scope_identifiers` emits just
+        `user_id` for the GLOBAL scope - so deleting "global" sent
+        `DELETE /memories?user_id=<user>` and removed everything that user had in
+        every scope. Measured destructively: it wiped a seeded evaluation set
+        while the caller had asked only for the shared scope.
+
+        Enumerating and deleting by id is slower and cannot over-reach: the
+        listing is already scope-filtered client-side.
+        """
         if not scope_key:
             raise ValueError("scope_key is required: deleting without one would target the whole scope")
-        self._request("DELETE", "/memories", params=self._identifiers(scope, scope_key))
+
+        removed = 0
+        while True:
+            listing = self.get_all(scope=scope, scope_key=scope_key, top_k=page)
+            if not listing.records:
+                return removed
+            for record in listing.records:
+                self.delete(record.id)
+                removed += 1
+            if not listing.truncated:
+                return removed
 
     def history(self, memory_id: str) -> list[dict[str, Any]]:
         payload = self._request("GET", f"/memories/{memory_id}/history")

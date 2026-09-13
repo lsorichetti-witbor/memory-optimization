@@ -134,6 +134,23 @@ states its cause, becomes a candidate.
 Nothing is written without `-Store`, and even then everything lands at
 `candidate`. That gap is the review gate; do not collapse it.
 
+### When the server is down
+
+Storing while the stack is down does **not** fail and does **not** lose the
+memory. It queues to a spool shared by every repository, scope and user, warns
+loudly, and exits 3 (distinct from 1 = bad write, 2 = bad config).
+
+```powershell
+& $ctx flush -List     # what is queued, writes nothing
+& $ctx flush           # replay oldest-first, delete only on success
+```
+
+`& $ctx health` always prints the pending count — a queued write is not stored,
+and nothing else will mention it.
+
+The queued time is preserved, so a memory replayed a week later does not rank as
+if it were written today. A failed replay keeps its file and exits non-zero.
+
 ### Promote or retire a memory
 
 ```powershell
@@ -183,3 +200,5 @@ Seeds known memories, runs five arms, prints a methodology block. Retrieval-only
 - [retrieval-policy.md](references/retrieval-policy.md) — scoring signals, and why the weights are unmeasured
 - [context-precedence.md](references/context-precedence.md) — the ladder, conflict rules, the blind spot
 - [evaluation.md](references/evaluation.md) — metrics, and why retrieval quality is not answer quality
+- [PROMPT_EXAMPLES.md](../../PROMPT_EXAMPLES.md) — what to type, per operation, from any repo
+- [OFFLINE-SPOOL-TEST.md](../../docs/context-memory/OFFLINE-SPOOL-TEST.md) — the spool's design, test and limits

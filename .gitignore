@@ -203,3 +203,8 @@ testing.ipynb
 # Local TLS-interception roots, machine-specific
 server/certs/*.crt
 server/dashboard/certs/*.crt
+
+# Cygwin/Git-Bash crash dumps. They appear in whatever directory the shell
+# died in, so match at any depth rather than only at the root.
+bash.exe.stackdump
+**/*.stackdump
