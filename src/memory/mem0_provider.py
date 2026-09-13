@@ -1,0 +1,260 @@
+"""MemoryProvider backed by the self-hosted Mem0 REST API.
+
+Endpoint shapes were read from `server/main.py` and re-verified against the
+running server's `/openapi.json`. Auth is the `X-API-Key` header
+(`server/auth.py`); a JWT works too but an API key is what a headless caller has.
+"""
+
+from __future__ import annotations
+
+import os
+from datetime import datetime, timezone
+from typing import Any, Optional, Sequence
+
+import httpx
+
+from src.memory.base import MemoryProvider
+from src.memory.envelope import Envelope, decode_envelope, encode_envelope
+from src.memory.lifecycle import Lifecycle, parse_lifecycle, transition
+from src.memory.scopes import Scope, scope_identifiers
+from src.memory.types import MemoryPage, MemoryRecord, SearchQuery
+
+DEFAULT_TIMEOUT = 30.0
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_dt(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+class Mem0Provider(MemoryProvider):
+    def __init__(
+        self,
+        client: httpx.Client,
+        api_key: str,
+        user: str,
+        repository: Optional[str] = None,
+        project: Optional[str] = None,
+    ) -> None:
+        self._client = client
+        self._api_key = api_key
+        self._user = user
+        self._repository = repository
+        self._project = project
+
+    @classmethod
+    def from_env(cls) -> "Mem0Provider":
+        base_url = os.environ.get("MEM0_API_URL")
+        if not base_url:
+            raise RuntimeError("MEM0_API_URL is not set")
+        api_key = os.environ.get("MEM0_API_KEY", "")
+        user = os.environ.get("MEM0_USER")
+        if not user:
+            raise RuntimeError("MEM0_USER is not set: every Mem0 write needs an identifier")
+        return cls(
+            client=httpx.Client(base_url=base_url.rstrip("/"), timeout=DEFAULT_TIMEOUT),
+            api_key=api_key,
+            user=user,
+            repository=os.environ.get("MEM0_REPOSITORY"),
+            project=os.environ.get("MEM0_PROJECT"),
+        )
+
+    def close(self) -> None:
+        self._client.close()
+
+    # -- transport ---------------------------------------------------------
+
+    def _request(self, method: str, path: str, **kwargs: Any) -> Any:
+        headers = {"X-API-Key": self._api_key} if self._api_key else {}
+        response = self._client.request(method, path, headers=headers, **kwargs)
+        if response.status_code >= 400:
+            raise RuntimeError(f"Mem0 {method} {path} failed [{response.status_code}]: {self._detail(response)}")
+        if not response.content:
+            return None
+        try:
+            return response.json()
+        except ValueError:
+            raise RuntimeError(f"Mem0 {method} {path} returned a non-JSON body: {response.text[:200]!r}") from None
+
+    @staticmethod
+    def _detail(response: httpx.Response) -> str:
+        try:
+            body = response.json()
+        except ValueError:
+            return response.text[:200]
+        if isinstance(body, dict) and "detail" in body:
+            return str(body["detail"])
+        return str(body)[:200]
+
+    # -- mapping -----------------------------------------------------------
+
+    def _identifiers(self, scope: Scope, scope_key: str) -> dict[str, str]:
+        return scope_identifiers(
+            scope,
+            key=scope_key,
+            user=self._user,
+            repository=self._repository,
+            project=self._project,
+        )
+
+    @staticmethod
+    def _to_record(row: dict[str, Any]) -> MemoryRecord:
+        envelope = decode_envelope(row.get("metadata"))
+        return MemoryRecord(
+            id=str(row.get("id", "")),
+            text=row.get("memory") or row.get("data") or "",
+            envelope=envelope,
+            score=row.get("score"),
+            created_at=_parse_dt(row.get("created_at")) or envelope.created_at,
+            updated_at=_parse_dt(row.get("updated_at")),
+            raw=row,
+        )
+
+    # -- MemoryProvider ----------------------------------------------------
+
+    def add(
+        self,
+        text: str,
+        *,
+        scope: Scope,
+        scope_key: str,
+        kind: str = "note",
+        topic: Optional[str] = None,
+        tags: Sequence[str] = (),
+        confidence: float = 0.5,
+        importance: float = 0.5,
+        source: Optional[str] = None,
+        infer: bool = False,
+    ) -> list[MemoryRecord]:
+        """Store a memory.
+
+        `infer` defaults to False: a curated memory must be stored as written.
+        Letting the extraction LLM rewrite it loses detail silently.
+        """
+        if not scope_key:
+            raise ValueError("scope_key is required")
+
+        envelope = Envelope(
+            scope=scope,
+            scope_key=scope_key,
+            kind=kind,
+            lifecycle=Lifecycle.CANDIDATE.value,
+            confidence=confidence,
+            importance=importance,
+            topic=topic,
+            source=source,
+            created_at=datetime.now(timezone.utc),
+            tags=tuple(tags),
+        )
+        body: dict[str, Any] = {
+            "messages": [{"role": "user", "content": text}],
+            "metadata": encode_envelope(envelope),
+            "infer": infer,
+        }
+        body.update(self._identifiers(scope, scope_key))
+
+        payload = self._request("POST", "/memories", json=body) or {}
+        rows = payload.get("results") or []
+        if not rows:
+            # An empty results array means nothing was stored. Returning [] here
+            # would make a failed write look exactly like a successful one.
+            raise RuntimeError(
+                f"Mem0 accepted the request but stored no memories for scope {scope.value}:{scope_key}. "
+                "With infer=True this usually means the extraction LLM found no fact in the text."
+            )
+        return [self._to_record(row) for row in rows]
+
+    def search(self, query: SearchQuery) -> list[MemoryRecord]:
+        filters = scope_identifiers(
+            query.scope,
+            key=query.scope_key,
+            user=self._user,
+            repository=query.repository or self._repository,
+            project=query.project or self._project,
+        )
+        body: dict[str, Any] = {"query": query.query, "filters": filters, "top_k": query.top_k}
+        if query.threshold is not None:
+            body["threshold"] = query.threshold
+
+        payload = self._request("POST", "/search", json=body) or {}
+        return [self._to_record(row) for row in payload.get("results") or []]
+
+    def get(self, memory_id: str) -> MemoryRecord:
+        payload = self._request("GET", f"/memories/{memory_id}") or {}
+        return self._to_record(payload)
+
+    def get_all(self, *, scope: Scope, scope_key: str, top_k: int = 100) -> MemoryPage:
+        if not scope_key:
+            raise ValueError("scope_key is required")
+        params = dict(self._identifiers(scope, scope_key))
+        params["top_k"] = str(top_k)
+        payload = self._request("GET", "/memories", params=params) or {}
+        rows = payload.get("results") or []
+        records = tuple(self._to_record(row) for row in rows)
+        return MemoryPage(
+            records=records,
+            limit=top_k,
+            returned=len(records),
+            truncated=len(records) >= top_k,
+        )
+
+    def update(
+        self,
+        memory_id: str,
+        *,
+        text: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> None:
+        body: dict[str, Any] = {}
+        if text is not None:
+            body["text"] = text
+        if metadata is not None:
+            body["metadata"] = metadata
+        if not body:
+            raise ValueError("update needs text or metadata")
+        self._request("PUT", f"/memories/{memory_id}", json=body)
+
+    def delete(self, memory_id: str) -> None:
+        self._request("DELETE", f"/memories/{memory_id}")
+
+    def delete_all(self, *, scope: Scope, scope_key: str) -> None:
+        if not scope_key:
+            raise ValueError("scope_key is required: deleting without one would target the whole scope")
+        self._request("DELETE", "/memories", params=self._identifiers(scope, scope_key))
+
+    def history(self, memory_id: str) -> list[dict[str, Any]]:
+        payload = self._request("GET", f"/memories/{memory_id}/history")
+        return payload or []
+
+    def reset(self) -> None:
+        self._request("POST", "/reset")
+
+    # -- lifecycle ---------------------------------------------------------
+
+    def _set_lifecycle(self, memory_id: str, target: Lifecycle, replacement_id: Optional[str] = None) -> None:
+        current = self.get(memory_id)
+        source = parse_lifecycle(current.envelope.lifecycle)
+        patch = transition(source, target, at=_now_iso(), superseded_by=replacement_id)
+        merged = encode_envelope(current.envelope)
+        merged.update(patch)
+        self.update(memory_id, metadata=merged)
+
+    def promote(self, memory_id: str) -> None:
+        """candidate/stale -> durable."""
+        self._set_lifecycle(memory_id, Lifecycle.DURABLE)
+
+    def mark_stale(self, memory_id: str) -> None:
+        self._set_lifecycle(memory_id, Lifecycle.STALE)
+
+    def supersede(self, memory_id: str, replacement_id: str) -> None:
+        if not replacement_id:
+            raise ValueError("superseded_by is required: a superseded memory needs a pointer to its replacement")
+        self._set_lifecycle(memory_id, Lifecycle.SUPERSEDED, replacement_id=replacement_id)

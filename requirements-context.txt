@@ -1,0 +1,5 @@
+# Test/runtime deps for the Context Manager (src/). Installed into .venv, not the
+# system Python. tiktoken is deliberately absent: src/context/tokens.py uses it
+# only when importable and falls back to a heuristic counter otherwise.
+httpx>=0.28.0
+pytest>=8.2.2

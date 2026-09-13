@@ -88,6 +88,9 @@ dev = [
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+markers = [
+    "integration: hits a live Mem0 server; skipped unless MEM0_API_URL is set",
+]
 
 [tool.hatch.build]
 include = [
